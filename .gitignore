@@ -64,7 +64,6 @@ backend/user_prompts/
 .playwright-mcp/
 
 # ===== AI IDE =====
-.trae/
 .zcode/
 
 # ===== TypeScript build cache =====
