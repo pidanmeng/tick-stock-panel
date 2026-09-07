@@ -335,13 +335,14 @@ def test_client_requires_api_key():
 
 
 def test_datasets_declaration():
-    """声明 realtime/daily/adj_factor/financial; minute 未声明 (回退 tickflow)。"""
+    """声明 realtime/daily/adj_factor/financial/minute (minute 走 quota-h 网关)。"""
     config = FuyaoProvider().config
     assert "realtime" in config.datasets
     assert "daily" in config.datasets
     assert "adj_factor" in config.datasets
     assert "financial" in config.datasets
-    assert "minute" not in config.datasets
+    assert "minute" in config.datasets
+    assert "full_minute" not in config.datasets  # 未接入 → 回退 tickflow
 
 
 # ---- API Key 解析 (secrets.json > .env, 对齐 tickflow 语义) ----
@@ -556,7 +557,7 @@ def test_test_dataset_realtime_preview(monkeypatch):
 
 def test_test_dataset_unsupported_dataset_reports_fallback(monkeypatch):
     provider, _ = _provider_with(monkeypatch, [[]])
-    out = provider.test_dataset("minute")
+    out = provider.test_dataset("full_minute")  # 未接入数据集 → 提示回退
     assert "error" in out and "回退" in out["error"]
 
 

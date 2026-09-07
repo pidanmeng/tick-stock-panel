@@ -12,7 +12,10 @@
   - financial    财务五表(股本除外): 三表多期序列 + 指标单期, 字段映射为 TickFlow
                  canonical 列名, 扶摇独有字段原名透传为扩展列; bps 由估值 pb_mrq
                  反推; shares 无上游接口恒空
-未声明 minute → provider_has_dataset 为 False, 自动回退 tickflow。
+  - minute      1分钟K (quota-h single_kline 网关, 非 aicubes 官方 surface): 不复权
+                 actual, 覆盖沪深股票/ETF及部分指数, 留存约 2 个月 (浅源, 声明
+                 minute_history_days); 单请求单标的 → 并发拉取, 详见 quota_kline.py
+未实现的其余数据集 → provider_has_dataset 为 False, 自动回退 tickflow。
 
 单位与口径 (CONTRIBUTING §3.1, 不可凭字段名推断):
   - 扶摇 price_change_ratio_pct 为百分数数值 (1.74 = +1.74%), 本项目 realtime
@@ -33,6 +36,7 @@ import math
 import re
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -43,11 +47,26 @@ from app.data_providers.normalizer import DAILY_COLS, normalize_daily
 from app.indicators.pipeline import filter_halt_days
 from app.plugins.fuyao import client as fuyao_client
 from app.plugins.fuyao.client import FuyaoClient, FuyaoError
+from app.plugins.fuyao.quota_kline import (
+    QuotaClient,
+    QuotaError,
+    bj_datetime,
+    classify_symbol,
+    needed_minute_bars,
+    scale_volume,
+)
 
 logger = logging.getLogger(__name__)
 
 # 只声明真实提供的数据集; 其余数据集 provider_has_dataset 返回 False → 回退 tickflow
-_DATASETS = ("realtime", "daily", "adj_factor", "financial")
+# minute 由 quota-h single_kline 网关提供 (见 quota_kline.py), 与其余数据集不同 surface
+_DATASETS = ("realtime", "daily", "adj_factor", "financial", "minute")
+
+# quota-h minute 拉取: 单请求单标的 → 并发; 单标的窗口一次取足 (不做并发分片)
+# 并发档位 (2026-09-05 实测): 网关饱和 ~100 req/s; 6→40.5、12→90、24→97 req/s
+# (24 起 p50 延迟抬升、增益趋零) — 12 为饱和前安全档, 0 失败。
+_QUOTA_CONCURRENCY = 12
+_QUOTA_MINUTE_COLS = ["symbol", "datetime", "open", "high", "low", "close", "volume", "amount"]
 
 API_KEY_ENV = "FUYAO_API_KEY"
 SECRETS_FIELD = "fuyao_api_key"  # UI 配置的 Key 存 secrets.json, 优先级高于 .env
@@ -300,10 +319,13 @@ class FuyaoProvider:
 
     name = "fuyao"
     builtin = True
+    # quota-h 分钟留存约 2 个月 (~40 交易日): 按浅源声明, 前端分时档位据此收窄
+    minute_history_days = 40
 
     def __init__(self) -> None:
         self.config = _FuyaoConfig()
         self._client: FuyaoClient | None = None
+        self._quota_client: QuotaClient | None = None
         self._dump_memo: dict[str, pl.DataFrame] = {}
         self._dump_path_memo: dict[str, Path] = {}
 
@@ -312,6 +334,10 @@ class FuyaoProvider:
             with contextlib.suppress(Exception):
                 self._client.close()
             self._client = None
+        if self._quota_client is not None:
+            with contextlib.suppress(Exception):
+                self._quota_client.close()
+            self._quota_client = None
         self._dump_memo.clear()
         self._dump_path_memo.clear()
 
@@ -319,6 +345,12 @@ class FuyaoProvider:
         if self._client is None:
             self._client = fuyao_client.FuyaoClient(api_key=get_api_key())
         return self._client
+
+    def _get_quota_client(self) -> QuotaClient:
+        """quota-h minute 客户端 (独立于 aicubes 官方 FuyaoClient, 无 Key)。"""
+        if self._quota_client is None:
+            self._quota_client = QuotaClient()
+        return self._quota_client
 
     # ---- dump 缓存 ----
     def _ensure_dump_path(self, dump_kind: str, cache_prefix: str) -> Path:
@@ -598,6 +630,105 @@ class FuyaoProvider:
                 time.sleep(_HIST_INTERVAL_S)
             s = chunk_end + 1
         return out
+
+    # ---- minute (quota-h single_kline, 非 aicubes 官方 surface) ----
+    def _fetch_quota_bars(
+        self, symbols: list[str], begin_bars: int
+    ) -> dict[str, tuple[str, list[dict]]]:
+        """并发拉取一批标的的 quota 1 分钟 K。
+
+        返回 {symbol: (kind, bars)}, 仅含可映射且拉取成功的标的 (失败/未映射已打日志,
+        不阻断其余标的)。结果按入参顺序组装; 单标的走直连路径, 多标的走线程池。
+        """
+        targets: list[str] = []
+        mapping: dict[str, tuple[str, str, str]] = {}
+        skipped: list[str] = []
+        for sym in symbols:
+            m = classify_symbol(sym)
+            if m is None:
+                skipped.append(sym)
+            else:
+                mapping[sym] = m
+                targets.append(sym)
+        if skipped:
+            logger.warning(
+                "扶摇分钟K: %d 个标的无 quota market 映射, 跳过 (未覆盖代码): %s",
+                len(skipped), ", ".join(skipped[:10]),
+            )
+
+        def fetch(sym: str) -> tuple[str, list[dict]]:
+            code, market, kind = mapping[sym]
+            try:
+                bars = self._get_quota_client().minute_kline(code, market, begin_bars=begin_bars)
+            except QuotaError as e:
+                logger.warning("扶摇分钟K拉取失败 %s: %s", sym, e)
+                return kind, []
+            return kind, bars
+
+        results: dict[str, tuple[str, list[dict]]] = {}
+        if len(targets) <= 1:
+            for sym in targets:
+                results[sym] = fetch(sym)
+            return results
+        with ThreadPoolExecutor(max_workers=_QUOTA_CONCURRENCY) as pool:
+            fut_by_sym = {sym: pool.submit(fetch, sym) for sym in targets}
+            for sym in targets:  # 顺序取回, 保持结果稳定
+                results[sym] = fut_by_sym[sym].result()
+        return results
+
+    def get_minute(
+        self,
+        symbols: list[str],
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        asset_type: str = "stock",  # noqa: ARG002 — 资产类型由 symbol 前缀判定, 不依赖入参
+        freq: str = "1m",  # noqa: ARG002 — 本源只存 1m, 更高周期由上层本地聚合
+        on_chunk_done: Callable[[int, int], None] | None = None,
+    ) -> pl.DataFrame:
+        """1 分钟 K (不复权) → 内部契约 [symbol, datetime(北京墙钟 naive), OHLC, volume(手), amount(元)]。
+
+        quota-h 网关只支持相对窗口且 code_list 单码 → 逐标的按窗口估算根数拉取,
+        本层按 [start_time, end_time] 过滤; 早于服务端留存 (~2 个月) 的部分取不到。
+
+        窗口时区归一: 上游 (如 kline_sync.fetch_minute_single) 会传带 CN_TZ 的 aware
+        datetime (为了给 TickFlow ms 入参), 而本层 bar 时间为北京墙钟 naive — 直接比较
+        会抛 naive/aware TypeError → 误触发回退。这里统一剥掉 tzinfo 转 naive 再过滤
+        (aware 值即北京墙钟, 剥离后与 naive bar 同口径)。
+        """
+        lo = start_time.replace(tzinfo=None) if start_time is not None else None
+        hi = end_time.replace(tzinfo=None) if end_time is not None else None
+        count = needed_minute_bars(lo, hi)
+        bars_by_sym = self._fetch_quota_bars(symbols, count)
+        rows_out: list[dict] = []
+        total = len(symbols)
+        for i, sym in enumerate(symbols):
+            if on_chunk_done:
+                on_chunk_done(i + 1, total)
+            hit = bars_by_sym.get(sym)
+            if not hit:
+                continue
+            kind, bars = hit
+            for bar in bars:
+                dt = bj_datetime(bar["time_ms"])
+                if lo is not None and dt < lo:
+                    continue
+                if hi is not None and dt > hi:
+                    continue
+                rows_out.append(
+                    {
+                        "symbol": sym,
+                        "datetime": dt,
+                        "open": bar.get("open"),
+                        "high": bar.get("high"),
+                        "low": bar.get("low"),
+                        "close": bar.get("close"),
+                        "volume": scale_volume(bar.get("volume"), kind),
+                        "amount": bar.get("amount"),
+                    }
+                )
+        if not rows_out:
+            return pl.DataFrame()
+        return pl.DataFrame(rows_out).select(_QUOTA_MINUTE_COLS).sort(["symbol", "datetime"])
 
     # ---- adj_factor ----
     def get_adj_factors(
@@ -1067,6 +1198,24 @@ class FuyaoProvider:
             except FuyaoError as e:
                 return {"provider": self.name, "dataset": dataset, "rows": 0, "error": str(e)}
             head = df.head(5).to_dicts()
+            return {
+                "provider": self.name,
+                "dataset": dataset,
+                "rows": df.height,
+                "columns": df.columns,
+                "preview": head,
+            }
+        if dataset == "minute":
+            syms = [s for s in (symbols or [])][:3] or ["600000.SH"]
+            try:
+                df = self.get_minute(syms, datetime.now() - timedelta(days=1), datetime.now())
+            except QuotaError as e:
+                return {"provider": self.name, "dataset": dataset, "rows": 0, "error": str(e)}
+            head = df.head(5).to_dicts()
+            for row in head:  # datetime → ISO 字符串, 保证 JSON 可序列化
+                for k, v in list(row.items()):
+                    if isinstance(v, (date, datetime)):
+                        row[k] = v.isoformat()
             return {
                 "provider": self.name,
                 "dataset": dataset,
