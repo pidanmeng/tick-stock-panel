@@ -49,7 +49,32 @@
 
 | 功能文档 | 覆盖功能域 | 受众 | 状态 |
 | --- | --- | --- | --- |
-| （暂无） | 行情总览 / 选股 / 策略 / 监控 / 回测 / 挖掘 / 财务 / 复盘 / 自选 / 扩展数据 / 数据源 / 数据管道 | 开发者 | 待用 `/understand-feature` 逐篇生成并登记 |
+| [整体架构与基础设施](features/architecture-and-infrastructure.md) | 启动流程、数据流、定时任务、缓存分层、能力路由（main.py / jobs / repository / capabilities） | 开发者 | 已完成 |
+| [看板 Dashboard](features/dashboard.md) | 市场总览、概念/行业聚合、大盘环境（overview / market_overview_builder / regime） | 开发者 | 已完成 |
+| [自选 Watchlist](features/watchlist.md) | 自选分组、批量导入、截图 OCR、行情展示（watchlist / quote_service） | 开发者 | 已完成 |
+| [选股 Screener](features/screener.md) | 预设策略即时扫描、自定义 SQL、历史窗口缓存（screener / strategy） | 开发者 | 已完成 |
+| [因子 Factors](features/factors.md) | 因子系统、策略引擎因子计算（factor-system / strategy/engine） | 开发者 | 已完成 |
+| [回测 Backtest](features/backtest.md) | 信号回测、矩阵挖掘、worker 隔离（backtest/engine / worker / mining） | 开发者 | 已完成 |
+| [个股分析 StockAnalysis](features/stock-analysis.md) | 个股 AI 分析、关键价位、报告落盘（stock_analysis / stock_analyzer） | 开发者 | 已完成 |
+| [连板梯队 LimitUpLadder](features/limit-ladder.md) | 连板梯队、真假板修正、五档盘口（limit_signals / price_limits / depth） | 开发者 | 已完成 |
+| [概念分析 ConceptAnalysis](features/concept-analysis.md) | 概念涨幅轮动、成分聚合（concept_rotation_analyzer） | 开发者 | 已完成 |
+| [行业分析 IndustryAnalysis](features/industry-analysis.md) | 板块实时聚合快照、行业总览（sector_monitor / industry_overview） | 开发者 | 已完成 |
+| [财务分析 Financials](features/financials.md) | 财务独立同步、AI 财务分析（financial_sync / financial_analyzer） | 开发者 | 已完成 |
+| [监控中心 Monitor](features/monitor.md) | 监控规则引擎、告警记录、通知推送（monitor_rules / alert_store / monitor_service） | 开发者 | 已完成 |
+| [市场环境 Regime](features/regime.md) | 市场阶段、主线、环境纯函数（regime_builder / market_phase / market_mainline） | 开发者 | 已完成 |
+| [异动监控 AbnormalMoves](features/abnormal-moves.md) | 竞价/盘中/偏移异动、交易所偏离值（abnormal_moves） | 开发者 | 已完成 |
+| [持仓提醒 Lots](features/lots.md) | 持仓提醒、策略 lots 配置（lots service） | 开发者 | 已完成 |
+| [信号库 Signals](features/signals.md) | 自定义信号表达式、信号管理（custom_signals） | 开发者 | 已完成 |
+| [复盘 Review](features/review.md) | 市场复盘、AI 报告、龙虎榜（market_recap / ai_reports） | 开发者 | 已完成 |
+| [指数 Indices](features/indices.md) | 核心指数成分、指数同步（index_const / index_sync） | 开发者 | 已完成 |
+| [数据管理 Data](features/data-management.md) | 数据管道、扩展数据、历史修复（data / pipeline / ext_data） | 开发者 | 已完成 |
+| [数据源设置](features/data-sources.md) | 能力路由、数据源 CRUD、TickFlow 档位、插件 Key（capabilities / data_providers / custom_sources） | 开发者 | 已完成 |
+| [AI 设置](features/ai-settings.md) | LLM 接入、预设模板、连接测试（ai_provider） | 开发者 | 已完成 |
+| [实时监控设置](features/monitoring.md) | 行情轮询、SSE 刷新、分时/分钟落盘、推送渠道（QuoteService / monitor） | 开发者 | 已完成 |
+| [扩展页面设置](features/ext-pages.md) | 扩展数据源装配分析菜单、模板字段映射（ext_data / analysis_menus） | 开发者 | 已完成 |
+| [网络设置](features/network-settings.md) | 请求超时、压缩、并发配置（timeout config） | 开发者 | 已完成 |
+| [菜单设置](features/menu-settings.md) | 左侧导航排序/隐藏、监控徽标开关（preferences / nav_order） | 开发者 | 已完成 |
+| [系统设置](features/system-settings.md) | 策略页偏好、通知/语音、缓存、版本、认证、看门狗（system config / auth / watchdog） | 开发者 | 已完成 |
 
 ### 0.6 索引 ↔ 正文章节对应
 
