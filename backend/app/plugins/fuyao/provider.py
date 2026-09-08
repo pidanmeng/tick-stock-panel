@@ -496,6 +496,45 @@ class FuyaoProvider:
         ]
         return pl.concat(chunks, how="diagonal_relaxed") if chunks else pl.DataFrame()
 
+    def _daily_from_snapshot(self, date: date, symset: set[str]) -> pl.DataFrame | None:
+        """全市场快照 → 单日日K。1-2 次请求覆盖全部标的, 替代逐标的 historical 兜底。
+
+        快照字段到日K契约映射: open_price→open, high_price→high, low_price→low,
+        last_price→close, volume 股→手(floor /100), turnover→amount。
+        失败(FuyaoError / 空数据)返回 None, 由调用方回退 dump 路径。
+        """
+        try:
+            rows, server_ts = self._get_client().snapshot_all()
+        except FuyaoError as e:
+            logger.warning("扶摇 snapshot 拉取失败: %s", e)
+            return None
+        if not rows:
+            return None
+
+        records = []
+        for row in rows:
+            symbol = row.get("thscode")
+            if not symbol or symbol not in symset:
+                continue
+            volume = _to_float(row.get("volume"))
+            records.append({
+                "symbol": symbol,
+                "date": date,
+                "open": _to_float(row.get("open_price")),
+                "high": _to_float(row.get("high_price")),
+                "low": _to_float(row.get("low_price")),
+                "close": _to_float(row.get("last_price")),
+                "volume": math.floor(volume / 100.0) if volume is not None else None,
+                "amount": _to_float(row.get("turnover")),
+                "quote_ts": server_ts or 0,
+            })
+
+        if not records:
+            return None
+
+        df = normalize_daily(records, source=self.name)
+        return df if not df.is_empty() else None
+
     def iter_daily(
         self,
         symbols: list[str],
@@ -511,6 +550,37 @@ class FuyaoProvider:
         start_dt = start_time or (end_dt - timedelta(days=365))
         start_d, end_d = start_dt.date(), end_dt.date()
         symset = set(symbols)
+
+        try:
+            tdays = self.trading_days()
+            need_days = {d for d in (start_d + timedelta(days=i) for i in range((end_d - start_d).days + 1)) if d in tdays}
+            if not need_days:
+                logger.info("扶摇日K: 窗口 [%s ~ %s] 无交易日, 跳过同步", start_d, end_d)
+                if on_chunk_done:
+                    on_chunk_done(1, 1)
+                return
+
+            if len(need_days) == 1:
+                only_day = next(iter(need_days))
+                today_local = datetime.now().astimezone().date()
+                if only_day == today_local:
+                    try:
+                        snapshot_df = self._daily_from_snapshot(today_local, symset)
+                        if snapshot_df is not None:
+                            logger.info(
+                                "扶摇日K: 用 snapshot 拉取今天 %s 数据 (%d 条)",
+                                today_local,
+                                snapshot_df.height,
+                            )
+                            if on_chunk_done:
+                                on_chunk_done(1, 1)
+                            if not snapshot_df.is_empty():
+                                yield snapshot_df
+                            return
+                    except Exception as e:
+                        logger.warning("扶摇 snapshot 快路径失败, 回退 dump: %s", e)
+        except (FuyaoError, AttributeError):
+            pass  # 交易日历不可用 → 继续执行原有逻辑, 不阻断同步
 
         if (end_d - start_d).days <= _RECENT_DUMP_DAYS:
             try:
