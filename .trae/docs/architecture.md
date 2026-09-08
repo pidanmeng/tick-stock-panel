@@ -1,6 +1,59 @@
 # TSP 项目架构文档
 
-> 本文档由真实代码勘察整理（关键结论均可在正文标注的 `文件:行号` 处复核），**只描述当前仓库已存在的能力**，不描述"规划中/设计示例"内容。如与代码不符，以代码为准；能力边界与二开契约以 [CONTRIBUTING.md](../../CONTRIBUTING.md) 与 [docs/secondary-development.md](../../docs/secondary-development.md) 为准（该文档区分"已可用/按需扩展"，不得把示例当实现）。
+> 本文档是 TSP 项目的**架构目录文档**：正文描述项目整体架构与模块地图（只描述已存在的实现，关键结论均可在标注的 `文件:行号` 处复核）；各功能的详细说明通过 §0 索引到具体文档。如与代码不符，以代码为准；能力边界与二开契约以 [CONTRIBUTING.md](../../CONTRIBUTING.md) 与 [docs/secondary-development.md](../../docs/secondary-development.md) 为准（该文档区分"已可用/按需扩展"，不得把示例当实现）。
+
+## 0. 功能文档索引（目录）
+
+> 以下是本文档索引的全部文档。**用户文档**面向终端用户（如何使用/配置/部署），**开发者文档**面向开发者/贡献者（如何修改/扩展/贡献）。新功能文档产出后必须在 §0.5 登记；已有文档变更时同步更新链接与标题。功能文档模板见 [features/_template.md](features/_template.md)，使用 `/understand-feature` 命令生成。
+
+### 0.1 用户文档（面向终端用户：如何使用、配置、部署 TSP）
+
+| 功能域 | 文档 |
+| --- | --- |
+| 功能总览 | [features.md](../../docs/features.md) |
+| 配置 | [configuration.md](../../docs/configuration.md) |
+| 部署 | [deployment.md](../../docs/deployment.md)、[deploy-password.md](../../docs/deploy-password.md) |
+| 策略 | [strategy.md](../../docs/strategy.md)、[strategy-iteration.md](../../docs/strategy-iteration.md) |
+| 自定义数据源 | [custom-data-source.md](../../docs/custom-data-source.md)（含 [examples/](../../docs/examples/custom-data-source/README.md)） |
+| 市场阶段 | [market-phase.md](../../docs/market-phase.md) |
+| 挖掘 | [mining.md](../../docs/mining.md) |
+| 因子平台 | [factor-system-design.md](../../docs/factor-system-design.md)、[factor-platform-plan.md](../../docs/factor-platform-plan.md) |
+| TickFlow Pro | [tickflow-pro-phase1-probe.md](../../docs/tickflow-pro-phase1-probe.md)、[tickflow-pro-shared-rate-limit.md](../../docs/tickflow-pro-shared-rate-limit.md) |
+
+### 0.2 开发者文档（面向开发者/贡献者：如何修改、扩展、贡献代码）
+
+#### 0.2.1 开发指南（`docs/`）
+
+| 功能域 | 文档 |
+| --- | --- |
+| 二次开发 | [secondary-development.md](../../docs/secondary-development.md) |
+| 插件开发 | [plugin-development.md](../../docs/plugin-development.md) |
+| 贡献规范 | [CONTRIBUTING.md](../../CONTRIBUTING.md) |
+| AI 开发入口 | [AGENTS.md](../../AGENTS.md) |
+
+### 0.3 TRAE 文档归档
+
+| 文档 | 说明 |
+| --- | --- |
+| [documents/architecture-docs-and-trae-toolchain.md](../documents/architecture-docs-and-trae-toolchain.md) | 原始架构文档与 TRAE 工具链规划（历史归档，持续演进以 architecture.md 为准） |
+
+### 0.4 设计文档索引
+
+| 文档 | 受众 | 说明 |
+| --- | --- | --- |
+| [design.md](design.md) | 开发者 | 前端设计风格指南（色板/字体/组件/图表/格式化约定，新增前端界面必读） |
+
+### 0.5 功能文档（`.trae/docs/features/`）
+
+逐篇产出的功能级详细文档，覆盖文件位置、业务逻辑、数据流、调用链、扩展指南、测试，是各功能修改/扩展时的第一参考。已创建条目登记如下（模板：[features/_template.md](features/_template.md)）：
+
+| 功能文档 | 覆盖功能域 | 受众 | 状态 |
+| --- | --- | --- | --- |
+| （暂无） | 行情总览 / 选股 / 策略 / 监控 / 回测 / 挖掘 / 财务 / 复盘 / 自选 / 扩展数据 / 数据源 / 数据管道 | 开发者 | 待用 `/understand-feature` 逐篇生成并登记 |
+
+### 0.6 索引 ↔ 正文章节对应
+
+各功能域在正文中的模块地图位置（便于从文档跳回正文）：行情/数据源 §3/§6 · 后端模块 §4 · API×前端路由 §5 · 存储与缓存 §7 · 前端结构 §8 · 扩展与二开 §9 · 生命周期 §10 · 数据契约 §11。
 
 ## 1. 定位与技术栈
 
