@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, Suspense } from 'react'
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { useQuoteStream, useQuoteStreamStatus } from '@/lib/useQuoteStream'
 import { ToastContainer, toast } from '@/components/Toast'
@@ -57,7 +57,7 @@ import {
   PanelLeftOpen,
 } from 'lucide-react'
 import { Logo } from './Logo'
-import { api, type CapabilityMatrix, type IndexQuote } from '@/lib/api'
+import { api, type CapabilityMatrix, type IndexQuote, type NavLayoutItem } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { useIsDesktop } from '@/lib/useMediaQuery'
 import { useDialogBackdrop } from '@/lib/useDialogBackdrop'
@@ -338,6 +338,46 @@ function AIConfigBadge({ configured, model }: { configured?: boolean; model?: st
       )}
       <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${configured ? 'bg-bear' : 'bg-warning'}`} />
     </NavLink>
+  )
+}
+
+// 整页底部状态条 — 目前仅承载菜单布局切换 select (需求约束: 暂不展示其他状态)。
+function NavLayoutStatusBar() {
+  const { data: prefs } = usePreferences()
+  const qc = useQueryClient()
+  // 布局列表: 后端返回含默认布局 (id='') 的完整列表; 旧后端无字段时兜底为默认布局。
+  const layouts = useMemo<NavLayoutItem[]>(() => {
+    const src = prefs?.nav_layouts ?? []
+    if (src.length > 0) return src
+    return [{
+      id: '',
+      name: '默认布局',
+      nav_order: prefs?.nav_order ?? [],
+      nav_hidden: prefs?.nav_hidden ?? [],
+    }]
+  }, [prefs?.nav_layouts, prefs?.nav_order, prefs?.nav_hidden])
+  const activeId = prefs?.nav_active_layout ?? ''
+
+  const switchLayout = useMutation({
+    mutationFn: (id: string) => api.setActiveNavLayout(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: QK.preferences }),
+  })
+
+  return (
+    <footer className="col-span-full flex items-center gap-2 border-t border-border bg-surface/70 px-3 py-1 backdrop-blur-sm">
+      <span className="shrink-0 text-[10px] uppercase tracking-[0.15em] text-muted select-none">菜单布局</span>
+      <select
+        value={activeId}
+        disabled={switchLayout.isPending}
+        onChange={e => switchLayout.mutate(e.target.value)}
+        aria-label="切换菜单布局"
+        className="h-6 rounded border border-border bg-base px-1.5 text-[11px] text-foreground focus:outline-none focus:border-accent/50 disabled:opacity-50"
+      >
+        {layouts.map(it => (
+          <option key={it.id} value={it.id}>{it.name}</option>
+        ))}
+      </select>
+    </footer>
   )
 }
 
@@ -629,7 +669,11 @@ export function Layout() {
   return (
     <div
       className="h-screen grid bg-base text-foreground overflow-hidden transition-[grid-template-columns] duration-200 ease-smooth"
-      style={{ gridTemplateColumns: isDesktop && !overlayPreview ? (navState === 'expanded' ? '14rem 1fr' : navState === 'rail' ? '3.5rem 1fr' : '0 1fr') : '1fr' }}
+      style={{
+        gridTemplateColumns: isDesktop && !overlayPreview ? (navState === 'expanded' ? '14rem 1fr' : navState === 'rail' ? '3.5rem 1fr' : '0 1fr') : '1fr',
+        // 第二行给底部状态条 (跨全宽 col-span-full)
+        gridTemplateRows: 'minmax(0, 1fr) auto',
+      }}
     >
       {/* 移动端抽屉遮罩 */}
       {!isDesktop && drawerOpen && (
@@ -1048,6 +1092,7 @@ export function Layout() {
           <Outlet />
         </Suspense>
       </motion.main>
+      <NavLayoutStatusBar />
       <ToastContainer />
       <AlertToastContainer />
       <AiAnalysisHost />

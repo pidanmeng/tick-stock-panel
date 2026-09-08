@@ -551,6 +551,8 @@ def get_preferences() -> dict:
         "monitor_ext_fields": preferences.get_monitor_ext_fields(),
         "nav_order": preferences.get_nav_order(),
         "nav_hidden": preferences.get_nav_hidden(),
+        "nav_layouts": preferences.get_nav_layouts(),
+        "nav_active_layout": preferences.get_active_nav_layout(),
         "screener_auto_run": preferences.get_screener_auto_run(),
         "limit_ladder_monitor_enabled": preferences.get_limit_ladder_monitor_enabled(),
         "depth_polling_interval": preferences.get_depth_polling_interval(),
@@ -846,26 +848,95 @@ def get_watchlist_columns() -> dict:
 
 class NavOrderIn(BaseModel):
     nav_order: list[str]
+    layout_id: str | None = None
 
 
 class NavHiddenIn(BaseModel):
     nav_hidden: list[str]
+    layout_id: str | None = None
+
+
+class NavLayoutNameIn(BaseModel):
+    name: str
+    source_layout_id: str | None = None
+
+
+class NavLayoutRenameIn(BaseModel):
+    id: str
+    name: str
+
+
+class NavLayoutIdIn(BaseModel):
+    id: str
 
 
 @router.put("/preferences/nav-order")
 def update_nav_order(req: NavOrderIn) -> dict:
-    """保存左侧菜单排序（内置页面 path + 扩展分析菜单 id 的有序列表）。"""
+    """保存左侧菜单排序 (内置页面 path + 扩展分析菜单 id 的有序列表)。
+
+    layout_id 缺省 = 当前生效布局 ('' = 默认布局, 写顶层旧字段)。
+    """
     from app.services import preferences
-    saved = preferences.set_nav_order(req.nav_order)
+    try:
+        saved = preferences.set_nav_order(req.nav_order, req.layout_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return {"nav_order": saved}
 
 
 @router.put("/preferences/nav-hidden")
 def update_nav_hidden(req: NavHiddenIn) -> dict:
-    """保存左侧菜单隐藏项。"""
+    """保存左侧菜单隐藏项 (layout_id 缺省 = 当前生效布局)。"""
     from app.services import preferences
-    saved = preferences.set_nav_hidden(req.nav_hidden)
+    try:
+        saved = preferences.set_nav_hidden(req.nav_hidden, req.layout_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return {"nav_hidden": saved}
+
+
+@router.put("/preferences/nav-layouts/create")
+def create_nav_layout(req: NavLayoutNameIn) -> dict:
+    """新建具名菜单布局; source_layout_id 指定拷贝来源 (缺省/'' = 默认布局)。"""
+    from app.services import preferences
+    try:
+        layout = preferences.create_nav_layout(req.name, req.source_layout_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"layout": layout}
+
+
+@router.put("/preferences/nav-layouts/rename")
+def rename_nav_layout(req: NavLayoutRenameIn) -> dict:
+    """重命名具名菜单布局。"""
+    from app.services import preferences
+    try:
+        layout = preferences.rename_nav_layout(req.id, req.name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"layout": layout}
+
+
+@router.put("/preferences/nav-layouts/delete")
+def delete_nav_layout(req: NavLayoutIdIn) -> dict:
+    """删除具名菜单布局; 删除当前生效布局后回退默认布局。"""
+    from app.services import preferences
+    try:
+        layout_id = preferences.delete_nav_layout(req.id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"layout_id": layout_id}
+
+
+@router.put("/preferences/nav-layouts/active")
+def set_active_nav_layout(req: NavLayoutIdIn) -> dict:
+    """切换当前生效布局 (id='' 表示默认布局)。"""
+    from app.services import preferences
+    try:
+        active = preferences.set_active_nav_layout(req.id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"nav_active_layout": active}
 
 
 @router.put("/preferences/watchlist-columns")

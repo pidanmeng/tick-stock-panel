@@ -1778,6 +1778,14 @@ export interface WecomBotStatus {
   last_error: string
 }
 
+/** 菜单布局方案: 默认布局(id='')数据即顶层 nav_order/nav_hidden, 其余为具名布局。 */
+export interface NavLayoutItem {
+  id: string
+  name: string
+  nav_order: string[]
+  nav_hidden: string[]
+}
+
 export interface Preferences {
   realtime_quotes_enabled: boolean
   watchlist_groups_in_nav: boolean
@@ -1837,6 +1845,10 @@ export interface Preferences {
   webhook_default_channels?: string[]
   nav_order: string[]
   nav_hidden: string[]
+  /** 菜单布局列表 (首项默认布局 id='', 数据即顶层 nav_order/nav_hidden) */
+  nav_layouts?: NavLayoutItem[]
+  /** 当前生效菜单布局 id ('' = 默认布局) */
+  nav_active_layout?: string
   screener_auto_run: boolean
   minute_intraday_refresh: boolean
   minute_intraday_refresh_interval: number
@@ -2222,15 +2234,38 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ hour, minute }),
     }),
-  saveNavOrder: (nav_order: string[]) =>
+  /** 保存菜单排序到布局 (layout_id 缺省 = 当前生效布局; '' = 默认布局)。 */
+  saveNavOrder: (nav_order: string[], layout_id?: string) =>
     request<{ nav_order: string[] }>('/api/settings/preferences/nav-order', {
       method: 'PUT',
-      body: JSON.stringify({ nav_order }),
+      body: JSON.stringify({ nav_order, layout_id }),
     }),
-  saveNavHidden: (nav_hidden: string[]) =>
+  /** 保存菜单隐藏项到布局 (layout_id 缺省 = 当前生效布局)。 */
+  saveNavHidden: (nav_hidden: string[], layout_id?: string) =>
     request<{ nav_hidden: string[] }>('/api/settings/preferences/nav-hidden', {
       method: 'PUT',
-      body: JSON.stringify({ nav_hidden }),
+      body: JSON.stringify({ nav_hidden, layout_id }),
+    }),
+  /** 新建布局; sourceLayoutId 指定拷贝来源 (''/缺省 = 默认布局)。 */
+  createNavLayout: (name: string, sourceLayoutId?: string) =>
+    request<{ layout: NavLayoutItem }>('/api/settings/preferences/nav-layouts/create', {
+      method: 'PUT',
+      body: JSON.stringify({ name, source_layout_id: sourceLayoutId }),
+    }),
+  renameNavLayout: (id: string, name: string) =>
+    request<{ layout: NavLayoutItem }>('/api/settings/preferences/nav-layouts/rename', {
+      method: 'PUT',
+      body: JSON.stringify({ id, name }),
+    }),
+  deleteNavLayout: (id: string) =>
+    request<{ layout_id: string }>('/api/settings/preferences/nav-layouts/delete', {
+      method: 'PUT',
+      body: JSON.stringify({ id }),
+    }),
+  setActiveNavLayout: (id: string) =>
+    request<{ nav_active_layout: string }>('/api/settings/preferences/nav-layouts/active', {
+      method: 'PUT',
+      body: JSON.stringify({ id }),
     }),
   updateInstrumentsSchedule: (hour: number, minute: number) =>
     request<{ hour: number; minute: number }>('/api/settings/preferences/instruments-schedule', {

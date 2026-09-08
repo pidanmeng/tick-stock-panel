@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   DndContext,
@@ -17,9 +17,10 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Eye, EyeOff, ExternalLink, GripVertical, Settings, Bell } from 'lucide-react'
+import { Eye, EyeOff, ExternalLink, GripVertical, Settings, Bell, Plus, Pencil, Trash2, RotateCcw } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api } from '@/lib/api'
+import { Modal } from '@/components/Modal'
+import { api, type NavLayoutItem } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { usePreferences } from '@/lib/useSharedQueries'
 
@@ -174,8 +175,42 @@ export function SettingsMenuSettingsPanel() {
     visible: m.visible,
   }))
 
+  // 布局列表: 后端返回含默认布局 (id='') 的完整列表; 旧后端无字段时兜底为默认布局。
+  const layouts = useMemo<NavLayoutItem[]>(() => {
+    const src = prefs?.nav_layouts ?? []
+    if (src.length > 0) return src
+    return [{
+      id: '',
+      name: '默认布局',
+      nav_order: prefs?.nav_order ?? [],
+      nav_hidden: prefs?.nav_hidden ?? [],
+    }]
+  }, [prefs?.nav_layouts, prefs?.nav_order, prefs?.nav_hidden])
+
+  const activeLayoutId = prefs?.nav_active_layout ?? ''
+
+  // 面板当前编辑的布局 (独立于生效布局; '' = 默认布局)
+  const [editLayoutId, setEditLayoutId] = useState('')
+  const editing = useMemo(
+    () => layouts.find(it => it.id === editLayoutId) ?? layouts[0],
+    [layouts, editLayoutId],
+  )
+
+  // 拖拽过程的乐观顺序 — 切换编辑布局时必须清空, 避免残留上一个布局的顺序
+  const [localOrder, setLocalOrder] = useState<string[] | null>(null)
+  useEffect(() => { setLocalOrder(null) }, [editLayoutId])
+
+  // 编辑目标被删除或偏好数据未就绪时回退默认布局
+  useEffect(() => {
+    if (!layouts.some(it => it.id === editLayoutId)) setEditLayoutId('')
+  }, [layouts, editLayoutId])
+
+  const editOrder = editing?.nav_order ?? []
+  const editHidden = editing?.nav_hidden ?? []
+  const editLayoutIdStr = editing?.id ?? ''
+
   const allEntries = useMemo(() => {
-    const saved = prefs?.nav_order ?? []
+    const saved = editOrder
     const entryMap = new Map<string, NavEntry>()
     for (const e of BUILTIN_PAGES) entryMap.set(e.id, e)
     for (const e of analysisEntries) entryMap.set(e.id, e)
@@ -206,14 +241,12 @@ export function SettingsMenuSettingsPanel() {
       else ordered.push(e)
     }
     return ordered
-  }, [prefs?.nav_order, analysisEntries])
+  }, [editOrder, analysisEntries])
 
-  const hiddenSet = useMemo(() => new Set(prefs?.nav_hidden ?? []), [prefs?.nav_hidden])
+  const hiddenSet = useMemo(() => new Set(editHidden), [editHidden])
 
-  // Local order state for optimistic drag updates
-  const [localOrder, setLocalOrder] = useState<string[] | null>(null)
   const orderedEntries = useMemo(() => {
-    const order = localOrder ?? prefs?.nav_order ?? []
+    const order = localOrder ?? editOrder
     if (!order.length) return allEntries
     const byId = new Map(allEntries.map(e => [e.id, e]))
     const result: NavEntry[] = []
@@ -237,10 +270,10 @@ export function SettingsMenuSettingsPanel() {
       else result.push(e)
     }
     return result
-  }, [localOrder, prefs?.nav_order, allEntries])
+  }, [localOrder, editOrder, allEntries])
 
   const saveNavOrder = useMutation({
-    mutationFn: (order: string[]) => api.saveNavOrder(order),
+    mutationFn: (order: string[]) => api.saveNavOrder(order, editLayoutIdStr),
     onSuccess: () => {
       setLocalOrder(null)
       qc.invalidateQueries({ queryKey: QK.preferences })
@@ -248,7 +281,7 @@ export function SettingsMenuSettingsPanel() {
   })
 
   const saveNavHidden = useMutation({
-    mutationFn: (hidden: string[]) => api.saveNavHidden(hidden),
+    mutationFn: (hidden: string[]) => api.saveNavHidden(hidden, editLayoutIdStr),
     onSuccess: () => qc.invalidateQueries({ queryKey: QK.preferences }),
   })
 
@@ -276,7 +309,7 @@ export function SettingsMenuSettingsPanel() {
     saveNavHidden.mutate([...next])
   }
 
-  // 监控中心徽标开关 (localStorage)
+  // 监控中心徽标开关 (localStorage, 全局偏好, 不随布局保存)
   const [badgeEnabled, setBadgeEnabled] = useState(() => {
     try { return localStorage.getItem('monitor_badge_enabled') !== '0' } catch { return true }
   })
@@ -287,14 +320,122 @@ export function SettingsMenuSettingsPanel() {
     try { localStorage.setItem('monitor_badge_enabled', next ? '1' : '0') } catch { /* ignore */ }
   }
 
+  // 布局管理 (创建 / 重命名 / 重置 / 删除)
+  const [layoutDialog, setLayoutDialog] = useState<null | 'create' | 'rename' | 'reset' | 'delete'>(null)
+  const [layoutName, setLayoutName] = useState('')
+
+  // 新建布局以「面板当前编辑的布局」为起点 (拷贝其排序/显隐)
+  const createLayout = useMutation({
+    mutationFn: (name: string) => api.createNavLayout(name, editLayoutIdStr),
+    onSuccess: (res) => {
+      setLayoutDialog(null)
+      setEditLayoutId(res.layout.id)
+      qc.invalidateQueries({ queryKey: QK.preferences })
+    },
+  })
+
+  const renameLayout = useMutation({
+    mutationFn: (name: string) => api.renameNavLayout(editLayoutIdStr, name),
+    onSuccess: () => {
+      setLayoutDialog(null)
+      qc.invalidateQueries({ queryKey: QK.preferences })
+    },
+  })
+
+  // 重置当前编辑布局: 清空自定义排序与显隐, 恢复默认菜单顺序 (全部显示)
+  const canResetLayout = editOrder.length > 0 || editHidden.length > 0
+  const resetLayout = useMutation({
+    mutationFn: async () => {
+      await api.saveNavOrder([], editLayoutIdStr)
+      await api.saveNavHidden([], editLayoutIdStr)
+    },
+    onSuccess: () => {
+      setLayoutDialog(null)
+      setLocalOrder(null)
+      qc.invalidateQueries({ queryKey: QK.preferences })
+    },
+  })
+
+  const deleteLayout = useMutation({
+    mutationFn: () => api.deleteNavLayout(editLayoutIdStr),
+    onSuccess: () => {
+      setLayoutDialog(null)
+      setEditLayoutId('')
+      qc.invalidateQueries({ queryKey: QK.preferences })
+    },
+  })
+
+  const isEditingNamed = editLayoutIdStr !== ''
+  const layoutSubmitting = createLayout.isPending || renameLayout.isPending
+  const activeLayoutName = layouts.find(it => it.id === activeLayoutId)?.name ?? '默认布局'
+
+  const openCreate = () => { setLayoutName(''); setLayoutDialog('create') }
+  const openRename = () => { setLayoutName(editing?.name ?? ''); setLayoutDialog('rename') }
+
   return (
     <div className="max-w-5xl space-y-6">
       <section className="rounded-2xl border border-border bg-surface p-6 bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.12),transparent_38%)]">
         <div className="text-[11px] uppercase tracking-[0.2em] text-accent/80">菜单设置</div>
         <h2 className="mt-2 text-2xl font-semibold tracking-tight text-foreground">调整左侧菜单顺序</h2>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-secondary">
-          拖动左侧手柄调整菜单排列顺序，点击眼睛图标控制菜单在侧边栏中的显示或隐藏。
+          支持维护多套独立布局，每套布局各自保存菜单的排序与显隐。编辑与生效解耦：
+          当前编辑「{editing?.name ?? '默认布局'}」，在页面底部状态栏切换生效布局。
+          拖动左侧手柄排序，点击眼睛图标控制菜单在侧边栏中的显示或隐藏。
         </p>
+      </section>
+
+      {/* 布局方案管理 — 选择要编辑的布局 + 创建/重命名/删除 */}
+      <section className="flex flex-wrap items-center gap-2 rounded-card border border-border bg-surface px-4 py-3">
+        <label htmlFor="nav-layout-edit" className="shrink-0 text-xs font-medium text-secondary">编辑布局</label>
+        <select
+          id="nav-layout-edit"
+          value={editLayoutIdStr}
+          onChange={e => setEditLayoutId(e.target.value)}
+          className="h-8 min-w-44 rounded border border-border bg-base px-2 text-xs text-foreground focus:outline-none focus:border-accent/50"
+        >
+          {layouts.map(it => (
+            <option key={it.id} value={it.id}>
+              {it.name}{it.id === activeLayoutId ? ' · 当前生效' : ''}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={openCreate}
+          className="inline-flex items-center gap-1 rounded-btn border border-accent/30 bg-accent/10 px-2.5 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20"
+        >
+          <Plus className="h-3.5 w-3.5" /> 新建布局
+        </button>
+        <button
+          type="button"
+          onClick={() => setLayoutDialog('reset')}
+          disabled={!canResetLayout}
+          title="清空该布局的自定义排序与显隐, 恢复默认菜单顺序"
+          className="inline-flex items-center gap-1 rounded-btn border border-border px-2.5 py-1.5 text-xs text-secondary transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <RotateCcw className="h-3 w-3" /> 重置
+        </button>
+        {isEditingNamed && (
+          <>
+            <button
+              type="button"
+              onClick={openRename}
+              className="inline-flex items-center gap-1 rounded-btn border border-border px-2.5 py-1.5 text-xs text-secondary transition-colors hover:bg-elevated"
+            >
+              <Pencil className="h-3 w-3" /> 重命名
+            </button>
+            <button
+              type="button"
+              onClick={() => setLayoutDialog('delete')}
+              className="inline-flex items-center gap-1 rounded-btn border border-danger/30 bg-danger/10 px-2.5 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/20"
+            >
+              <Trash2 className="h-3 w-3" /> 删除
+            </button>
+          </>
+        )}
+        <span className="ml-auto hidden text-[11px] text-muted lg:inline">
+          当前生效: {activeLayoutName} · 可在底部状态栏切换
+        </span>
       </section>
 
       <section className="rounded-card border border-border bg-surface overflow-hidden">
@@ -333,6 +474,116 @@ export function SettingsMenuSettingsPanel() {
           <div className="px-5 py-10 text-center text-sm text-muted">正在加载菜单...</div>
         )}
       </section>
+
+      {/* 布局创建/重命名/重置/删除弹窗 */}
+      {layoutDialog && (
+        <Modal
+          onClose={() => setLayoutDialog(null)}
+          ariaLabel={
+            layoutDialog === 'delete' ? '删除布局确认'
+              : layoutDialog === 'reset' ? '重置布局确认'
+                : layoutDialog === 'create' ? '新建布局'
+                  : '重命名布局'
+          }
+        >
+          {layoutDialog === 'delete' ? (
+            <div className="p-5 space-y-4">
+              <div className="text-sm font-semibold text-foreground">删除布局「{editing?.name}」?</div>
+              <p className="text-xs leading-5 text-secondary">
+                该布局保存的菜单排序与显隐配置将被删除。
+                {editLayoutIdStr === activeLayoutId && ' 该布局当前正在生效, 删除后将自动切回默认布局。'}
+                默认布局与其他布局不受影响。
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setLayoutDialog(null)}
+                  className="rounded-btn border border-border px-3 py-1.5 text-xs text-secondary transition-colors hover:bg-elevated"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={() => deleteLayout.mutate()}
+                  disabled={deleteLayout.isPending}
+                  className="rounded-btn border border-danger/30 bg-danger/10 px-3 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/20 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {deleteLayout.isPending ? '删除中...' : '删除'}
+                </button>
+              </div>
+            </div>
+          ) : layoutDialog === 'reset' ? (
+            <div className="p-5 space-y-4">
+              <div className="text-sm font-semibold text-foreground">重置布局「{editing?.name}」?</div>
+              <p className="text-xs leading-5 text-secondary">
+                将清空该布局保存的自定义菜单排序与显隐，恢复为默认菜单顺序（全部显示）。
+                默认布局与其他布局不受影响。
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setLayoutDialog(null)}
+                  className="rounded-btn border border-border px-3 py-1.5 text-xs text-secondary transition-colors hover:bg-elevated"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={() => resetLayout.mutate()}
+                  disabled={resetLayout.isPending}
+                  className="rounded-btn border border-danger/30 bg-danger/10 px-3 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/20 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {resetLayout.isPending ? '重置中...' : '重置'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                const name = layoutName.trim()
+                if (!name || layoutSubmitting) return
+                if (layoutDialog === 'create') createLayout.mutate(name)
+                else if (layoutDialog === 'rename') renameLayout.mutate(name)
+              }}
+              className="p-5 space-y-4"
+            >
+              <div className="text-sm font-semibold text-foreground">
+                {layoutDialog === 'create' ? '新建布局' : '重命名布局'}
+              </div>
+              {layoutDialog === 'create' && (
+                <p className="text-xs leading-5 text-secondary">
+                  初始内容将拷贝自当前编辑布局「{editing?.name ?? '默认布局'}」的排序与显隐，可在创建后继续调整。
+                </p>
+              )}
+              <input
+                autoFocus
+                value={layoutName}
+                onChange={e => setLayoutName(e.target.value)}
+                maxLength={24}
+                placeholder={layoutDialog === 'create' ? '布局名称，如：短线、价值投资' : '新名称'}
+                className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs text-foreground focus:outline-none focus:border-accent/50"
+              />
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setLayoutDialog(null)}
+                  className="rounded-btn border border-border px-3 py-1.5 text-xs text-secondary transition-colors hover:bg-elevated"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  disabled={!layoutName.trim() || layoutSubmitting}
+                  className="rounded-btn border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent transition-colors hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {layoutSubmitting ? '保存中...' : '确定'}
+                </button>
+              </div>
+            </form>
+          )}
+        </Modal>
+      )}
     </div>
   )
 }

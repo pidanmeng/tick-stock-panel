@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import threading
+import uuid
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -1037,25 +1038,193 @@ def get_realtime_monitor_config() -> dict:
 
 
 def get_nav_order() -> list[str]:
-    """返回左侧菜单的自定义排序（内置页面 path + 扩展分析菜单 id）。"""
-    return load().get("nav_order", [])
+    """左侧菜单排序 (内置页面 path + 扩展分析菜单 id), 返回当前生效布局的值。
+
+    兼容语义: 无具名布局或 active 指向未知 id 时回退顶层旧字段 (即默认布局数据)。
+    """
+    return _resolve_nav("nav_order")
 
 
-def set_nav_order(order: list[str]) -> list[str]:
-    """保存左侧菜单排序。"""
-    save({"nav_order": order})
-    return get_nav_order()
+def set_nav_order(order: list[str], layout_id: str | None = None) -> list[str]:
+    """保存左侧菜单排序到指定布局。
+
+    layout_id 缺省 -> 写当前生效布局 ('' 或未知时写默认布局顶层旧字段),
+    与旧客户端不带 layout_id 的行为一致。
+    """
+    _set_nav_arr("nav_order", order, layout_id)
+    return order
 
 
 def get_nav_hidden() -> list[str]:
-    """返回左侧菜单中隐藏的项 id 列表。"""
-    return load().get("nav_hidden", [])
+    """左侧菜单中隐藏的项 id 列表 (当前生效布局)。"""
+    return _resolve_nav("nav_hidden")
 
 
-def set_nav_hidden(hidden: list[str]) -> list[str]:
-    """保存左侧菜单隐藏项。"""
-    save({"nav_hidden": hidden})
-    return get_nav_hidden()
+def set_nav_hidden(hidden: list[str], layout_id: str | None = None) -> list[str]:
+    """保存左侧菜单隐藏项到指定布局 (layout_id 缺省 = 当前生效布局)。"""
+    _set_nav_arr("nav_hidden", hidden, layout_id)
+    return hidden
+
+
+# ---- 多布局菜单 (nav layouts) ---------------------------------------------
+# 向后兼容约定:
+# - 「默认布局」是虚拟实体 (id=''), 数据始终沿用顶层旧字段 nav_order/nav_hidden,
+#   不在 nav_layouts 里重复持久化; 删除本段新增键即完整回滚。
+# - 具名布局存顶层 nav_layouts (保序 list[dict] {id,name,nav_order,nav_hidden})。
+# - nav_active_layout 记录当前生效布局 id ('' = 默认布局)。
+_DEFAULT_LAYOUT_NAME = "默认布局"
+_MAX_LAYOUT_NAME_LEN = 24
+
+
+def get_nav_layouts() -> list[dict]:
+    """返回完整布局列表: 默认布局 (数据取顶层旧字段) + 具名布局 (保序)。"""
+    data = load()
+    default_rec = {
+        "id": "",
+        "name": _DEFAULT_LAYOUT_NAME,
+        "nav_order": data.get("nav_order", []),
+        "nav_hidden": data.get("nav_hidden", []),
+    }
+    return [default_rec, *copy.deepcopy(data.get("nav_layouts") or [])]
+
+
+def get_active_nav_layout() -> str:
+    """当前生效布局 id ('' = 默认布局)。"""
+    return load().get("nav_active_layout", "")
+
+
+def _named_layouts() -> list[dict]:
+    return load().get("nav_layouts") or []
+
+
+def _find_named_layout(layouts: list[dict], layout_id: str) -> dict | None:
+    for rec in layouts:
+        if rec.get("id") == layout_id:
+            return rec
+    return None
+
+
+def _resolve_nav(key: str) -> list[str]:
+    """按当前生效布局解析导航字段; active 未知时自愈回退默认布局。"""
+    layout_id = get_active_nav_layout()
+    if layout_id:
+        rec = _find_named_layout(_named_layouts(), layout_id)
+        if rec is not None:
+            return rec.get(key, [])
+    return load().get(key, [])
+
+
+def _set_nav_arr(key: str, values: list[str], layout_id: str | None) -> None:
+    """写入指定布局的导航字段。
+
+    layout_id 显式给未知具名 id -> 拒绝 (ValueError), 避免静默写错地方;
+    layout_id 为 ''/缺省时写默认布局顶层旧字段; active 指向失效 id 时自愈回退默认。
+    """
+    target = layout_id if layout_id is not None else get_active_nav_layout()
+    if target and _find_named_layout(_named_layouts(), target) is None:
+        if layout_id is not None:
+            raise ValueError("布局不存在")
+        target = ""
+    if not target:
+        save({key: values})
+        return
+    data = load()
+    layouts = list(data.get("nav_layouts") or [])
+    layouts = [dict(r) if r.get("id") == target else r for r in layouts]
+    for rec in layouts:
+        if rec.get("id") == target:
+            rec[key] = values
+            break
+    save({"nav_layouts": layouts})
+
+
+def _normalize_layout_name(name: str) -> str:
+    if not isinstance(name, str):
+        raise ValueError("布局名称必须是字符串")
+    clean = name.strip()
+    if not clean:
+        raise ValueError("布局名称不能为空")
+    if len(clean) > _MAX_LAYOUT_NAME_LEN:
+        raise ValueError(f"布局名称最长 {_MAX_LAYOUT_NAME_LEN} 个字符")
+    return clean
+
+
+def _check_layout_name(clean: str, layouts: list[dict], exclude_id: str = "") -> None:
+    if clean == _DEFAULT_LAYOUT_NAME:
+        raise ValueError("不能与默认布局重名")
+    for rec in layouts:
+        if rec.get("id") == exclude_id:
+            continue
+        if rec.get("name") == clean:
+            raise ValueError(f"布局名称已存在: {clean}")
+
+
+def create_nav_layout(name: str, source_layout_id: str | None = None) -> dict:
+    """新建具名布局, 内容拷贝来源布局的排序/显隐。
+
+    source_layout_id 缺省或为 '' -> 拷贝默认布局 (顶层旧字段)。未做过任何自定义时
+    等价于默认顺序起点; 显式给未知具名 id 则拒绝, 不静默回退。
+    """
+    layouts = list(_named_layouts())
+    clean = _normalize_layout_name(name)
+    _check_layout_name(clean, layouts)
+    source = source_layout_id if source_layout_id is not None else ""
+    if not source:
+        data = load()
+        order = data.get("nav_order", [])
+        hidden = data.get("nav_hidden", [])
+    else:
+        rec = _find_named_layout(layouts, source)
+        if rec is None:
+            raise ValueError("布局不存在")
+        order = rec.get("nav_order", [])
+        hidden = rec.get("nav_hidden", [])
+    rec = {
+        "id": uuid.uuid4().hex,
+        "name": clean,
+        "nav_order": copy.deepcopy(order),
+        "nav_hidden": copy.deepcopy(hidden),
+    }
+    layouts.append(rec)
+    save({"nav_layouts": layouts})
+    return copy.deepcopy(rec)
+
+
+def rename_nav_layout(layout_id: str, name: str) -> dict:
+    """重命名具名布局 (默认布局不可重命名)。"""
+    if not layout_id:
+        raise ValueError("默认布局不可重命名")
+    layouts = list(_named_layouts())
+    if _find_named_layout(layouts, layout_id) is None:
+        raise ValueError("布局不存在")
+    clean = _normalize_layout_name(name)
+    _check_layout_name(clean, layouts, exclude_id=layout_id)
+    renamed = {**next(r for r in layouts if r.get("id") == layout_id), "name": clean}
+    save({"nav_layouts": [renamed if r.get("id") == layout_id else r for r in layouts]})
+    return copy.deepcopy(renamed)
+
+
+def delete_nav_layout(layout_id: str) -> str:
+    """删除具名布局 (默认布局不可删); 删除当前生效布局后回退默认。"""
+    if not layout_id:
+        raise ValueError("默认布局不可删除")
+    data = load()
+    layouts = list(data.get("nav_layouts") or [])
+    if _find_named_layout(layouts, layout_id) is None:
+        raise ValueError("布局不存在")
+    updates: dict = {"nav_layouts": [r for r in layouts if r.get("id") != layout_id]}
+    if data.get("nav_active_layout") == layout_id:
+        updates["nav_active_layout"] = ""
+    save(updates)
+    return layout_id
+
+
+def set_active_nav_layout(layout_id: str) -> str:
+    """切换当前生效布局 ('' = 默认布局; 未知具名 id 拒绝)。"""
+    if layout_id and _find_named_layout(_named_layouts(), layout_id) is None:
+        raise ValueError("布局不存在")
+    save({"nav_active_layout": layout_id})
+    return layout_id
 
 
 def get_watchlist_columns() -> list[dict] | None:
