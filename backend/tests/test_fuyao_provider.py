@@ -838,6 +838,127 @@ def test_daily_dump_weekend_end_covered(monkeypatch):
     assert not df.is_empty()
 
 
+# ---- daily: snapshot 快路径(只差今天) ----
+
+class _FrozenNow(datetime):
+    """冻结 fp.datetime.now() 与 astimezone(): today_local 恒为 2026-09-09(周三)。"""
+
+    _FROZEN = datetime(2026, 9, 9, 15, 30)
+
+    @classmethod
+    def now(cls, tz=None):
+        return cls._FROZEN
+
+    def astimezone(self, tz=None):
+        return self
+
+
+class _SnapshotDailyClient:
+    """快照快路径假客户端: 交易日历 + snapshot_all + historical_kline 记录。"""
+
+    def __init__(self, snap_rows, tdays, hist_bars=None):
+        self.snap_rows = snap_rows
+        self.tdays = tdays
+        self.bars = hist_bars or {}
+        self.snapshot_calls = 0
+        self.hist_calls: list[dict] = []
+
+    def trading_days(self):
+        return [{"date_ms": _sh_ms(d)} for d in self.tdays]
+
+    def snapshot_all(self):
+        self.snapshot_calls += 1
+        if not self.snap_rows:
+            raise fc.FuyaoError("全市场快照为空")
+        return list(self.snap_rows), 0
+
+    def historical_kline(self, thscode, start_ms, end_ms, adjust="none"):
+        self.hist_calls.append({"thscode": thscode, "start": start_ms, "end": end_ms})
+        return [b for b in self.bars.get(thscode, []) if start_ms <= b["date_ms"] <= end_ms]
+
+    def close(self):
+        pass
+
+
+def _snapshot_provider(monkeypatch, client, *, memo_ten=None) -> FuyaoProvider:
+    p = FuyaoProvider()
+    p._client = client
+    monkeypatch.setattr(fp, "datetime", _FrozenNow)
+    monkeypatch.setattr(fp, "_HIST_INTERVAL_S", 0.0)
+    # 与开发机真实大 dump 缓存隔离; 10d dump 由测试显式注入 memo。
+    p._ensure_daily_big_dump = lambda start_d: None  # type: ignore[assignment]
+    p._daily_dump_info = lambda: None  # type: ignore[assignment]
+    if memo_ten is not None:
+        p._dump_memo[fp._DAILY10_DUMP_KIND] = memo_ten
+    return p
+
+
+def test_daily_snapshot_fastpath_covers_last_day_when_rest_in_dump(monkeypatch):
+    """启动增量 [上一交易日, 今天]: 只差今天 → 10d dump(上一交易日) + snapshot(今天),
+    不打逐标的 historical (启动走 historical 每只股票的回归)。"""
+    syms = ["000001.SZ", "600519.SH"]
+    dump_rows = [
+        _dump_bar("000001.SZ", date(2026, 9, 8), 11.5),
+        _dump_bar("600519.SH", date(2026, 9, 8), 1485.0),
+    ]
+    client = _SnapshotDailyClient(
+        snap_rows=[
+            _row(thscode="000001.SZ", last_price=11.8),
+            _row(thscode="600519.SH", last_price=1490.0),
+        ],
+        tdays=[date(2026, 9, 8), date(2026, 9, 9)],
+    )
+    provider = _snapshot_provider(monkeypatch, client, memo_ten=_daily10_dump(dump_rows))
+    monkeypatch.setattr(fp, "get_api_key", lambda: "test-key")
+
+    chunks = list(provider.iter_daily(
+        syms, datetime(2026, 9, 8), datetime(2026, 9, 9)
+    ))
+    out = pl.concat(chunks, how="diagonal_relaxed") if chunks else pl.DataFrame()
+
+    # 昨天来自 dump、今天来自 snapshot, 两天都覆盖到
+    assert sorted(out["date"].unique().to_list()) == [date(2026, 9, 8), date(2026, 9, 9)]
+    assert out.height == 4
+    assert client.snapshot_calls == 1
+    assert client.hist_calls == []  # 未走逐标的 historical
+    today_rows = out.filter(pl.col("date") == date(2026, 9, 9))
+    assert today_rows["close"].to_list() == [11.8, 1490.0]
+
+
+def test_daily_snapshot_fastpath_skipped_when_gap_not_fully_covered(monkeypatch):
+    """窗口内除今天外还有未被 10d dump 覆盖的交易日 → 不止差今天, 快照不可用,
+    仍走逐标的接口 (快照不能拿今天数据冒充历史缺口日)。"""
+    syms = ["000001.SZ"]
+    client = _SnapshotDailyClient(
+        snap_rows=[_row(thscode="000001.SZ")],
+        tdays=[date(2026, 9, 7), date(2026, 9, 8), date(2026, 9, 9)],
+        hist_bars={
+            "000001.SZ": [
+                _bar(date(2026, 9, 7), 11.0),
+                _bar(date(2026, 9, 8), 11.5),
+                _bar(date(2026, 9, 9), 11.8),
+            ]
+        },
+    )
+    # 10d dump 只覆盖 09-08, 窗口 [09-07 ~ 09-09] 的 09-07 无法由 dump 提供
+    provider = _snapshot_provider(
+        monkeypatch,
+        client,
+        memo_ten=_daily10_dump([_dump_bar("000001.SZ", date(2026, 9, 8), 11.5)]),
+    )
+
+    chunks = list(provider.iter_daily(
+        syms, datetime(2026, 9, 7), datetime(2026, 9, 9)
+    ))
+    out = pl.concat(chunks) if chunks else pl.DataFrame()
+
+    assert client.snapshot_calls == 0  # 快照路径未启用
+    assert client.hist_calls  # 回退逐标的 historical 补齐整窗
+    assert sorted(out["date"].unique().to_list()) == [
+        date(2026, 9, 7), date(2026, 9, 8), date(2026, 9, 9)
+    ]
+
+
 def test_daily_dump_rejects_non_raw_adjustment(monkeypatch):
     """防御: dump 变为复权口径(adjusted != none)时拒绝输出, 不污染原始K线库。"""
     dump = _recent_daily_dump().with_columns(pl.lit("forward").alias("adjusted"))

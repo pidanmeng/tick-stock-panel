@@ -560,25 +560,48 @@ class FuyaoProvider:
                     on_chunk_done(1, 1)
                 return
 
-            if len(need_days) == 1:
-                only_day = next(iter(need_days))
-                today_local = datetime.now().astimezone().date()
-                if only_day == today_local:
-                    try:
-                        snapshot_df = self._daily_from_snapshot(today_local, symset)
-                        if snapshot_df is not None:
-                            logger.info(
-                                "扶摇日K: 用 snapshot 拉取今天 %s 数据 (%d 条)",
-                                today_local,
-                                snapshot_df.height,
+            # snapshot 快路径: 快照只代表"今天", 故仅当窗口终点是今天且今天是交易日时可用。
+            # 窗口内其余交易日必须全部已被 10d dump 覆盖 —— 否则该窗不止差今天(快照无法补
+            # 历史缺口), 交回既有 dump/单标的接口分档。典型命中场景是启动/盘后增量: 本地数据
+            # 截至上一交易日、只差今天, 管道窗口为 [上一交易日, 今天](见 daily_pipeline.run_now),
+            # 此前按窗口内交易日数判"仅同步今日"会因含上一交易日而漏判 → 逐标的 historical。
+            # 命中后以 dump(其余) + snapshot(今天) 一次覆盖全市场, 1-2 次请求替代 N 次单标的接口。
+            today_local = datetime.now().astimezone().date()
+            if end_d == today_local and today_local in need_days:
+                try:
+                    other_days = sorted(need_days - {today_local})
+                    rest_df = pl.DataFrame()
+                    covered = True
+                    if other_days:
+                        covered = False
+                        ten = self._ensure_dump(_DAILY10_DUMP_KIND, "daily_k_10d")
+                        ten_dates = pl.from_epoch(
+                            ten["date_ms"].cast(pl.Int64) + _SH_MS, time_unit="ms"
+                        ).dt.date()
+                        if (
+                            ten_dates.min() <= other_days[0]
+                            and ten_dates.max() >= other_days[-1]
+                        ):
+                            rest_df = self._daily_from_dump(
+                                ten, symset, other_days[0], other_days[-1]
                             )
-                            if on_chunk_done:
-                                on_chunk_done(1, 1)
-                            if not snapshot_df.is_empty():
-                                yield snapshot_df
-                            return
-                    except Exception as e:
-                        logger.warning("扶摇 snapshot 快路径失败, 回退 dump: %s", e)
+                            covered = True
+                    snapshot_df = self._daily_from_snapshot(today_local, symset) if covered else None
+                    if snapshot_df is not None:
+                        logger.info(
+                            "扶摇日K: 用 snapshot 拉取今天 %s 数据 (%d 条)",
+                            today_local,
+                            snapshot_df.height,
+                        )
+                        if on_chunk_done:
+                            on_chunk_done(1, 1)
+                        if not rest_df.is_empty():
+                            yield rest_df
+                        if not snapshot_df.is_empty():
+                            yield snapshot_df
+                        return
+                except Exception as e:
+                    logger.warning("扶摇 snapshot 快路径失败, 回退 dump/单标的接口: %s", e)
         except (FuyaoError, AttributeError):
             pass  # 交易日历不可用 → 继续执行原有逻辑, 不阻断同步
 
