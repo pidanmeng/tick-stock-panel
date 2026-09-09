@@ -316,6 +316,96 @@ export interface WatchlistGroup {
   color: WatchlistGroupColor
 }
 
+// ===== 同花顺智能诊股（ths_diagnose 扩展，/api/custom/ths-diagnose）=====
+export interface DiagnoseField {
+  name: string
+  dtype: string
+  label: string
+}
+
+export interface DiagnoseRow {
+  symbol: string
+  code?: string
+  name?: string | null
+  snapshot_date?: string | null
+  industry_name?: string | null
+  industry_code?: string | null
+  rank_industry?: number | null
+  rank_market?: number | null
+  total_industry?: number | null
+  total_market?: number | null
+  score_fund?: number | null
+  score_tech?: number | null
+  score_valuation?: number | null
+  score_message?: number | null
+  score_finance?: number | null
+  score_average?: number | null
+  score_delta?: number | null
+  fund_chg?: number | null
+  finance_total?: number | null
+  finance_prev?: number | null
+  abl_profit?: number | null
+  abl_growth?: number | null
+  abl_operate?: number | null
+  abl_cash?: number | null
+  abl_pay?: number | null
+  abl_asset?: number | null
+}
+
+export interface DiagnoseConfig {
+  configured: boolean
+  rows: number
+  date: string | null
+  running: boolean
+  universe?: { type?: string; symbols?: string[] } | null
+  include_trend: boolean
+  cap: number
+  fields: DiagnoseField[]
+}
+
+export interface DiagnoseProgress {
+  running: boolean
+  total: number
+  done: number
+  ok: number
+  failed: number
+  failed_symbols: string[]
+  warnings: Record<string, string>
+  started_at?: string | null
+  finished_at?: string | null
+}
+
+export interface DiagnoseSnapshot {
+  date: string | null
+  total: number
+  rows: DiagnoseRow[]
+}
+
+export interface DiagnoseScoreSet {
+  score_fund?: number | null
+  score_tech?: number | null
+  score_valuation?: number | null
+  score_message?: number | null
+  score_finance?: number | null
+  score_average?: number | null
+  score_delta?: number | null
+}
+
+export interface DiagnoseSummarySection {
+  date?: string | null
+  name?: string | null
+  ths_code?: string | null
+  industry_name?: string | null
+  industry_rank?: number | null
+  market_rank?: number | null
+  market_stock_total?: number | null
+  scores?: DiagnoseScoreSet
+  anomaly?: { content?: string | null; keywords?: string[] }[]
+  finance_overview?: string | null
+  valuation_tag?: string | null
+  message_effect?: string | null
+}
+
 export interface WatchlistImportCandidate {
   code: string
   symbol: string | null
@@ -2946,6 +3036,61 @@ export const api = {
     if (opts.date) qs.set('date', opts.date)
     return request<DimensionIntradayResult>(`/api/ext-data/${encodeURIComponent(id)}/dimension-intraday?${qs.toString()}`)
   },
+
+  // ===== 同花顺智能诊股（ths_diagnose 扩展）=====
+  thsDiagnoseConfig: () =>
+    request<DiagnoseConfig>('/api/custom/ths-diagnose/config'),
+
+  thsDiagnoseSnapshot: () =>
+    request<DiagnoseSnapshot>('/api/custom/ths-diagnose/snapshot'),
+
+  thsDiagnoseSnapshotPull: (symbols: string[] = [], includeTrend = true, scope: 'symbols' | 'all' = 'symbols') =>
+    request<{ status: string; queued: number; cap: number; skipped: string[] }>(
+      '/api/custom/ths-diagnose/snapshot/pull',
+      {
+        method: 'POST',
+        body: JSON.stringify({ symbols, include_trend: includeTrend, scope }),
+      },
+    ),
+
+  thsDiagnoseProgress: () =>
+    request<DiagnoseProgress>('/api/custom/ths-diagnose/snapshot/progress'),
+
+  thsDiagnoseSnapshotClear: () =>
+    request<{ status: string }>('/api/custom/ths-diagnose/snapshot/clear', { method: 'POST' }),
+
+  thsDiagnosePrefsSave: (body: { universe?: unknown; include_trend?: boolean }) =>
+    request<Record<string, unknown>>('/api/custom/ths-diagnose/prefs', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  thsDiagnoseStockSummary: (symbol: string) =>
+    request<DiagnoseSummarySection>(`/api/custom/ths-diagnose/stock/${encodeURIComponent(symbol)}/summary`),
+
+  thsDiagnoseStockFinance: (symbol: string, abilityId?: string) =>
+    request<Record<string, unknown>>(
+      `/api/custom/ths-diagnose/stock/${encodeURIComponent(symbol)}/finance${
+        abilityId ? `?ability_id=${encodeURIComponent(abilityId)}` : ''
+      }`,
+    ),
+
+  thsDiagnoseStockFund: (symbol: string, history?: string) =>
+    request<Record<string, unknown>>(
+      `/api/custom/ths-diagnose/stock/${encodeURIComponent(symbol)}/fund${
+        history ? `?history=${encodeURIComponent(history)}` : ''
+      }`,
+    ),
+
+  thsDiagnoseStockMessage: (symbol: string) =>
+    request<Record<string, unknown>>(`/api/custom/ths-diagnose/stock/${encodeURIComponent(symbol)}/message`),
+
+  thsDiagnoseStockValuation: (symbol: string, index = 'pb', period = '1') =>
+    request<Record<string, unknown>>(
+      `/api/custom/ths-diagnose/stock/${encodeURIComponent(symbol)}/valuation?index=${encodeURIComponent(
+        index,
+      )}&period=${encodeURIComponent(period)}`,
+    ),
 
   analysisMenus: () =>
     request<{ items: AnalysisMenu[] }>('/api/analysis-menus'),

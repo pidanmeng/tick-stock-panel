@@ -74,6 +74,10 @@ export const QK = {
   extDataRows:          (id: string, date?: string, limit?: number, columns?: string) => ['ext-data-rows', id, date, limit, columns] as const,
   dimensionMembers:     (id: string, field: string, value: string, date?: string) => ['dimension-members', id, field, value, date] as const,
   dimensionIntraday:    (id: string, field: string, value: string, date?: string) => ['dimension-intraday', id, field, value, date] as const,
+  diagnoseConfig:       ['ths-diagnose', 'config'] as const,
+  diagnoseSnapshot:     ['ths-diagnose', 'snapshot'] as const,
+  diagnoseProgress:     ['ths-diagnose', 'progress'] as const,
+  diagnoseStock:        (symbol: string) => ['ths-diagnose', 'stock', symbol] as const,
   analysisMenus:        ['analysis-menus'] as const,
   analysisMenu:         (id: string) => ['analysis-menu', id] as const,
 
