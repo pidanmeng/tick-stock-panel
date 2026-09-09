@@ -60,7 +60,9 @@ git diff --check                              # 提交前必须执行
 | Subagent | [finance-auditor](.trae/agents/finance-auditor.md) | 金融口径审计（只读）：复权/单位/交易日/时区/资产路由/缓存链路核查 |
 | Subagent | [research-analyst](.trae/agents/research-analyst.md) | 投研分析（只读）：结合项目研究能力与公开资料做结构化分析，标注来源与置信度 |
 | Subagent | [developer](.trae/agents/developer.md) | 程序开发（可读写）：按 L1/L2/L3 分类、最小改动实现并如实验证 |
+| Subagent | [upstream-sync](.trae/agents/upstream-sync.md) | 上游同步冲突分析顾问（只读）：fork 上游合入时的冲突归属、P0-P3 风险分级与逐文件解决预案 |
 | Skill | [run-verification](.trae/skills/run-verification/SKILL.md) | 按验证矩阵执行受影响测试/构建/静态检查并汇报实际结果 |
 | Skill | [build-strategy](.trae/skills/build-strategy/SKILL.md) | 自定义策略/信号开发引导（L1），含口径检查与测试要求 |
 | Skill | [investment-research](.trae/skills/investment-research/SKILL.md) | 投研复盘工作流 SOP（复盘/板块/个股/财报解读与输出规范） |
 | Command | [/new-strategy](.trae/commands/new-strategy.md) | 引导创建自定义策略 |
+| Command | [/sync-upstream](.trae/commands/sync-upstream.md) | 同步上游开源项目更新并处理冲突（安全检查 → 分歧分析 → merge → 冲突预案 → 验证） |
