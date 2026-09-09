@@ -41,6 +41,7 @@ git diff --check                              # 提交前必须执行
 
 ## 工作规则
 
+- **改动前必读架构**：每次对代码进行改动或新增功能前，必须先读 `.trae/docs/architecture.md` 了解整个项目架构（模块边界、数据流、调用链与锚点），再结合代码与测试证实设计，禁止凭文件名或界面现象猜测后直接动手。
 - 先理解调用链和现有测试，再进行修改。
 - 保持实现简单、改动范围最小，不处理无关问题。
 - 不覆盖工作区已有修改，不虚构测试或审查结果。
@@ -53,6 +54,8 @@ git diff --check                              # 提交前必须执行
 | 类型 | 名称 | 用途 |
 | --- | --- | --- |
 | Subagent | [architecture-guide](.trae/agents/architecture-guide.md) | 架构导航（只读）：模块边界/数据流/调用链/入口定位，输出带 `路径:行号` |
+| Subagent | [extension-guide](.trae/agents/extension-guide.md) | 二开架构与约束顾问（只读）：L1/L2/L3 分级、扩展点定位、架构护栏与高冲突热点提醒 |
+| Subagent | [feature-documenter](.trae/agents/feature-documenter.md) | 功能文档化（只读）：理解指定功能并产出完整功能文档，供修改/扩展/复审使用 |
 | Subagent | [code-reviewer](.trae/agents/code-reviewer.md) | 代码复审（只读）：按 CONTRIBUTING 复审清单与 P0-P3 级别出结论 |
 | Subagent | [finance-auditor](.trae/agents/finance-auditor.md) | 金融口径审计（只读）：复权/单位/交易日/时区/资产路由/缓存链路核查 |
 | Subagent | [research-analyst](.trae/agents/research-analyst.md) | 投研分析（只读）：结合项目研究能力与公开资料做结构化分析，标注来源与置信度 |
