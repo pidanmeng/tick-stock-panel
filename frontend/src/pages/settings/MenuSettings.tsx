@@ -23,11 +23,12 @@ import { Modal } from '@/components/Modal'
 import { api, type NavLayoutItem } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { usePreferences } from '@/lib/useSharedQueries'
+import { getFrontendExtensionNavigation } from '@/extensions/registry'
 
 interface NavEntry {
   id: string
   label: string
-  type: 'builtin' | 'analysis'
+  type: 'builtin' | 'analysis' | 'extension'
   visible: boolean
 }
 
@@ -104,7 +105,7 @@ function SortableItem({ entry, hidden, onToggleHidden, badgeEnabled, onToggleBad
       </div>
       <div>
         <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] ${
-          entry.type === 'analysis' ? 'bg-accent/10 text-accent' : 'bg-elevated text-muted'
+          entry.type !== 'builtin' ? 'bg-accent/10 text-accent' : 'bg-elevated text-muted'
         }`}>
           {entry.type === 'builtin' ? '内置' : '扩展'}
         </span>
@@ -175,6 +176,21 @@ export function SettingsMenuSettingsPanel() {
     visible: m.visible,
   }))
 
+  // 扩展导航项（如智能诊股）:
+  // id 取路由路径(与 Layout 侧栏的 n.to 一致, 与 nav_hidden/nav_order 里的内置页路径同口径),
+  // 这样「隐藏/排序」直接复用既有偏好链路, 无需单独持久化。
+  const extensionEntries: NavEntry[] = getFrontendExtensionNavigation()
+    .filter(item => item.route)
+    .map(item => ({
+      id: item.route.path,
+      label: item.label,
+      type: 'extension' as const,
+      visible: true,
+    }))
+
+  // 全部候选条目（默认顺序：内置页 → 分析菜单 → 扩展导航），用于填充 entryMap 与兜底追加。
+  const allCandidates: NavEntry[] = [...BUILTIN_PAGES, ...analysisEntries, ...extensionEntries]
+
   // 布局列表: 后端返回含默认布局 (id='') 的完整列表; 旧后端无字段时兜底为默认布局。
   const layouts = useMemo<NavLayoutItem[]>(() => {
     const src = prefs?.nav_layouts ?? []
@@ -212,10 +228,9 @@ export function SettingsMenuSettingsPanel() {
   const allEntries = useMemo(() => {
     const saved = editOrder
     const entryMap = new Map<string, NavEntry>()
-    for (const e of BUILTIN_PAGES) entryMap.set(e.id, e)
-    for (const e of analysisEntries) entryMap.set(e.id, e)
+    for (const e of allCandidates) entryMap.set(e.id, e)
 
-    if (saved.length === 0) return [...BUILTIN_PAGES, ...analysisEntries]
+    if (saved.length === 0) return allCandidates
 
     const ordered: NavEntry[] = []
     const seen = new Set<string>()
@@ -226,9 +241,9 @@ export function SettingsMenuSettingsPanel() {
         seen.add(id)
       }
     }
-    for (const e of [...BUILTIN_PAGES, ...analysisEntries]) {
+    for (const e of allCandidates) {
       if (seen.has(e.id)) continue
-      // 未保存过排序的新条目: 内置页插回默认位置, 分析菜单追加到末尾
+      // 未保存过排序的新条目: 内置页插回默认位置, 分析/扩展菜单追加到末尾
       const defaultIndex = BUILTIN_PAGES.findIndex(p => p.id === e.id)
       let anchor = -1
       if (defaultIndex > 0) {
@@ -241,7 +256,7 @@ export function SettingsMenuSettingsPanel() {
       else ordered.push(e)
     }
     return ordered
-  }, [editOrder, analysisEntries])
+  }, [editOrder, allCandidates])
 
   const hiddenSet = useMemo(() => new Set(editHidden), [editHidden])
 

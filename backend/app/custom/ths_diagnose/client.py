@@ -3,7 +3,8 @@
 
 对应 .trae/skills/10jqka-stock-diagnose/ 的 9 个接口（抓包文档化，2026-09-09 实测）。
 挂在 eq.10jqka.com.cn / dq.10jqka.com.cn 私有域名下，抓包与实抓均无鉴权头，
-可能随时加风控：本客户端做低并发 + 最小请求间隔 + 单次退避重试，禁止无脑放大重试。
+可能随时加风控。本客户端并发按需求放开（min_interval=0、并发走高），
+仅保留单次退避重试，禁止无脑放大重试。
 
 信封成功码不统一（关键）：
   - eq open/api 面（get_score）：status_code == 0
@@ -27,9 +28,9 @@ EQ_BASE = "https://eq.10jqka.com.cn"
 DQ_BASE = "https://dq.10jqka.com.cn"
 
 # 每只股票下拉取(3 请求)与详情弹窗(单只多接口)共用同一份限流配置：
-# 并发数与最小请求间隔均保守取值，降低触发风控概率。
-_DEFAULT_CONCURRENCY = 3
-_DEFAULT_INTERVAL_S = 0.25
+# 已按需求放开并发（不限制外部 API 负载）：并发走高，最小请求间隔设为 0。
+_DEFAULT_CONCURRENCY = 32
+_DEFAULT_INTERVAL_S = 0.0
 _TIMEOUT_S = 15.0
 _RETRIES = 1  # 失败后再重试 1 次
 

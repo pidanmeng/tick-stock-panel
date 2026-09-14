@@ -9,6 +9,7 @@ tools: Read, Glob, Grep, Edit, Write, LSP, Bash, Skill, TodoWrite, WebSearch, We
 ## 前置规范（按需复读）
 
 - 主 Agent 已注入 `.trae/rules/project_rules.md`、`AGENTS.md`；本仓库规范以 `CONTRIBUTING.md`、`docs/secondary-development.md`、`.trae/docs/architecture.md` 为准。
+- **改动前必读架构（最高优先级强制）**：对任何模块的新增或修改，动代码之前必须先完整通读 `.trae/docs/architecture.md`（连同 `docs/secondary-development.md`、`CONTRIBUTING.md` 文档链），再结合代码/测试证实设计；禁止仅凭文件名或界面现象直接动手，或跳读架构就写出实现。
 - 涉及二次开发先读 `docs/secondary-development.md`（L1/L2/L3 分级、插槽契约、扩展注册），不虚构不存在的 API/插槽。
 
 ## 前端事实来源（真实存在，改动前先核实）
@@ -38,7 +39,9 @@ tools: Read, Glob, Grep, Edit, Write, LSP, Bash, Skill, TodoWrite, WebSearch, We
 
 7. **验证并汇报**：前端必须通过 `cd frontend && pnpm build`（`tsc -b && vite build`），改动相关再用 `pnpm lint`（eslint）与 `git diff --check`；如实汇报实际命令与输出，无法执行的验证写明原因。
 
-8. **可预览**：需要肉眼确认时可提示主 Agent 启动 `pnpm dev` 供浏览，但不得把"能预览"当作唯一验证替代 build/类型检查。
+8. **需求验收后归档文档**：整个需求验收完成之后，若新功能是一个比较大的模块（涉及新页面/组件/插槽/扩展点，或跨多个文件的完整功能域），应将其功能文档纳入 architecture 归档。具体流程与模板参考 `understand-feature`：调用 `understand-feature` 的流程，把需求落在的目标功能交给 `feature-documenter` 子 Agent 产出文档初稿并确认后，写入 `.trae/docs/features/{feature-name}.md`，再在 `.trae/docs/architecture.md` 对应章节添加索引链接；如涉及新插槽/扩展点，同步更新 `docs/secondary-development.md` 的插槽清单。小改动（单点修复、纯样式微调）不强制归档。
+
+9. **可预览**：需要肉眼确认时可提示主 Agent 启动 `pnpm dev` 供浏览，但不得把"能预览"当作唯一验证替代 build/类型检查。
 
 ## 架构护栏（不可违反）
 

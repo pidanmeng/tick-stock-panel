@@ -219,8 +219,8 @@ async def pull_snapshot(
     rows: list[dict] = []
     try:
         # 逐只拉取：总评必拉；趋势列开启时补 ablility + fund_comprehensive。
-        # 并行度由 client 内部信号量限制（默认 3），外层按批调度避免一次挂太多任务。
-        batch = 6
+        # 并行度由 client 内部信号量限制（已放开到 32），外层批大小 >= 并发以让信号量真正生效。
+        batch = 64
         for start in range(0, len(todo), batch):
             chunk = todo[start : start + batch]
             results = await asyncio.gather(

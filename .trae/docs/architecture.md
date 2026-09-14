@@ -75,6 +75,7 @@
 | [网络设置](features/network-settings.md) | 请求超时、压缩、并发配置（timeout config） | 开发者 | 已完成 |
 | [菜单设置](features/menu-settings.md) | 左侧导航排序/隐藏、监控徽标开关（preferences / nav_order） | 开发者 | 已完成 |
 | [系统设置](features/system-settings.md) | 策略页偏好、通知/语音、缓存、版本、认证、看门狗（system config / auth / watchdog） | 开发者 | 已完成 |
+| [智能诊股](features/stock-diagnose.md) | 同花顺诊股评分快照与单只详情浮层（custom/ths_diagnose，L2 扩展） | 开发者 | 已完成 |
 
 ### 0.6 索引 ↔ 正文章节对应
 

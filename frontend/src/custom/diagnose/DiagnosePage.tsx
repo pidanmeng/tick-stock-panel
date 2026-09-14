@@ -2,10 +2,12 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import { RefreshCw, Trash2, ArrowUp, ArrowDown, ChevronsUpDown, Loader2 } from 'lucide-react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import type { DiagnoseRow } from '@/lib/api'
+import { VIRTUAL_LIST_THRESHOLD, useParentScroll } from '@/components/virtual-list/useParentScroll'
 import DiagnoseDetailDialog from './DiagnoseDetailDialog'
 import { useDiagnoseProgress } from './useDiagnoseProgress'
 
@@ -29,6 +31,10 @@ const finDiffOf = (r: DiagnoseRow): number | null => {
   const fp = num(colVal(r, 'finance_prev'))
   return ft !== null && fp !== null ? ft - fp : null
 }
+
+/** ST 判定：与项目既有口径一致（名称含 "ST"，含 *ST），见 price_limits / abnormal_moves。 */
+const isStName = (name: string | null | undefined): boolean =>
+  Boolean(name && name.toUpperCase().includes('ST'))
 
 interface SortCol {
   key: string
@@ -99,6 +105,7 @@ export default function DiagnosePage() {
   const [selectedIndustry, setSelectedIndustry] = useState<string | null>(null)
   const [chipFund, setChipFund] = useState(false)
   const [chipFin, setChipFin] = useState(false)
+  const [stFilter, setStFilter] = useState<'all' | 'st' | 'non-st'>('all')
   const [sortKey, setSortKey] = useState<string | null>('score_average')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [notice, setNotice] = useState<string | null>(null)
@@ -149,7 +156,7 @@ export default function DiagnosePage() {
     setNotice(null)
     try {
       const r = await api.thsDiagnoseSnapshotPull([], includeTrend, 'all')
-      setNotice(`已开始拉取 A 股全量 ${r.queued} 只，低并发分批执行`)
+      setNotice(`已开始拉取 A 股全量 ${r.queued} 只，高并发执行`)
       await qc.invalidateQueries({ queryKey: QK.diagnoseConfig })
       await qc.invalidateQueries({ queryKey: QK.diagnoseProgress })
     } catch (e) {
@@ -168,8 +175,10 @@ export default function DiagnosePage() {
     let rows = (snap?.rows ?? []) as DiagnoseRow[]
     if (chipFund) rows = rows.filter((r) => (num(colVal(r, 'fund_chg')) ?? -Infinity) > 0)
     if (chipFin) rows = rows.filter((r) => (finDiffOf(r) ?? -Infinity) > 0)
+    if (stFilter === 'st') rows = rows.filter((r) => isStName(r.name))
+    if (stFilter === 'non-st') rows = rows.filter((r) => !isStName(r.name))
     return rows
-  }, [snap, chipFund, chipFin])
+  }, [snap, chipFund, chipFin, stFilter])
 
   const sortValOf = (r: DiagnoseRow, key: string): number | null =>
     key === 'fin_diff' ? finDiffOf(r) : num(colVal(r, key))
@@ -209,6 +218,27 @@ export default function DiagnosePage() {
     return sorted.filter((r) => (r.industry_name || '未分类') === selectedIndustry)
   }, [sorted, viewGrouped, selectedIndustry])
 
+  // ---------------- 虚拟列表（大批量行时避免渲染全部 React 节点） ----------------
+  const tableRef = useRef<HTMLTableElement>(null)
+  const virtualized = viewRows.length > VIRTUAL_LIST_THRESHOLD
+  const { getScrollElement, scrollMargin } = useParentScroll(tableRef, virtualized)
+  const rowVirtualizer = useVirtualizer({
+    count: virtualized ? viewRows.length : 0,
+    getScrollElement,
+    estimateSize: () => 40,
+    getItemKey: (index) => viewRows[index].symbol,
+    overscan: 12,
+    scrollMargin,
+  })
+  const virtualRows = virtualized ? rowVirtualizer.getVirtualItems() : []
+  const totalSize = virtualized ? rowVirtualizer.getTotalSize() : 0
+  const firstVirtualRow = virtualRows[0]
+  const lastVirtualRow = virtualRows[virtualRows.length - 1]
+  const topPadding = firstVirtualRow ? firstVirtualRow.start - scrollMargin : 0
+  const bottomPadding = lastVirtualRow
+    ? totalSize - (lastVirtualRow.end - scrollMargin)
+    : totalSize
+
   const onSort = (k: string) => {
     if (sortKey === k) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
     else {
@@ -220,7 +250,31 @@ export default function DiagnosePage() {
   const resetChips = () => {
     setChipFund(false)
     setChipFin(false)
+    setStFilter('all')
   }
+
+  const renderBodyRow = (r: DiagnoseRow, index: number): ReactNode => (
+    <tr
+      key={r.symbol}
+      data-index={index}
+      ref={virtualized ? rowVirtualizer.measureElement : undefined}
+      onClick={() => setSelected({ symbol: r.symbol, name: r.name })}
+      className="border-b border-border last:border-0 cursor-pointer hover:bg-elevated/70 transition-colors"
+    >
+      <td className="px-2 py-1.5 whitespace-nowrap">
+        <span className="text-xs font-medium text-foreground">{r.name ?? r.symbol}</span>
+        <span className="block text-[11px] font-mono text-muted">{r.symbol}</span>
+      </td>
+      {viewGrouped ? null : (
+        <td className="px-2 py-1.5 text-xs text-muted whitespace-nowrap text-left">{r.industry_name ?? '—'}</td>
+      )}
+      {SORT_COLS.map((c) => (
+        <td key={c.key} className="px-2 py-1.5 font-mono tabular-nums whitespace-nowrap text-right">
+          {renderNumCell(r, c)}
+        </td>
+      ))}
+    </tr>
+  )
 
   const renderNumCell = (r: DiagnoseRow, c: SortCol): ReactNode => {
     if (c.kind === 'rank') {
@@ -277,7 +331,7 @@ export default function DiagnosePage() {
       <div className="rounded-card bg-surface border border-border px-4 py-3">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <p className="text-sm text-foreground">
-            A 股全量（沪深，约 5k 只）<span className="text-xs text-muted">· 外部私有接口，低并发分批执行</span>
+            A 股全量（沪深，约 5k 只）<span className="text-xs text-muted">· 外部私有接口，高并发执行</span>
           </p>
           <div className="flex items-center gap-3 flex-wrap">
             <label className="inline-flex items-center gap-1.5 text-xs text-muted">
@@ -354,6 +408,27 @@ export default function DiagnosePage() {
             >
               财务同比改善
             </button>
+            <span className="inline-flex rounded-full bg-elevated p-0.5">
+              {(
+                [
+                  ['all', '全部'],
+                  ['non-st', '非 ST'],
+                  ['st', '仅 ST'],
+                ] as const
+              ).map(([v, label]) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setStFilter(v)}
+                  title="按 ST 风险警示状态筛选（口径：名称含 ST，含 *ST）"
+                  className={`h-6 px-2.5 rounded-full text-xs transition-colors ${
+                    stFilter === v ? 'bg-accent text-white' : 'text-secondary hover:text-foreground'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </span>
           </div>
         </div>
       )}
@@ -390,7 +465,7 @@ export default function DiagnosePage() {
           )}
           <div className="rounded-card bg-surface border border-border overflow-hidden">
             <div className="overflow-auto max-h-[60vh]">
-              <table className="w-full border-collapse text-sm">
+              <table ref={tableRef} className="w-full border-collapse text-sm">
                 <thead className="sticky top-0 bg-surface z-10">
                   <tr className="border-b border-border">
                     <th className="px-2 py-1.5 text-left text-xs font-medium text-muted">名称 / 代码</th>
@@ -405,28 +480,23 @@ export default function DiagnosePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {viewRows.map((r) => (
-                    <tr
-                      key={r.symbol}
-                      onClick={() => setSelected({ symbol: r.symbol, name: r.name })}
-                      className="border-b border-border last:border-0 cursor-pointer hover:bg-elevated/70 transition-colors"
-                    >
-                      <td className="px-2 py-1.5 whitespace-nowrap">
-                        <span className="text-xs font-medium text-foreground">{r.name ?? r.symbol}</span>
-                        <span className="block text-[11px] font-mono text-muted">{r.symbol}</span>
-                      </td>
-                      {viewGrouped ? null : (
-                        <td className="px-2 py-1.5 text-xs text-muted whitespace-nowrap text-left">
-                          {r.industry_name ?? '—'}
-                        </td>
+                  {virtualized ? (
+                    <>
+                      {topPadding > 0 && (
+                        <tr aria-hidden="true">
+                          <td colSpan={12} className="p-0 border-0" style={{ height: topPadding }} />
+                        </tr>
                       )}
-                      {SORT_COLS.map((c) => (
-                        <td key={c.key} className={`px-2 py-1.5 font-mono tabular-nums whitespace-nowrap text-right`}>
-                          {renderNumCell(r, c)}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
+                      {virtualRows.map((v) => renderBodyRow(viewRows[v.index], v.index))}
+                      {bottomPadding > 0 && (
+                        <tr aria-hidden="true">
+                          <td colSpan={12} className="p-0 border-0" style={{ height: bottomPadding }} />
+                        </tr>
+                      )}
+                    </>
+                  ) : (
+                    viewRows.map((r, i) => renderBodyRow(r, i))
+                  )}
                   {viewRows.length === 0 && (
                     <tr>
                       <td colSpan={12} className="px-3 py-10 text-center text-xs text-muted">
