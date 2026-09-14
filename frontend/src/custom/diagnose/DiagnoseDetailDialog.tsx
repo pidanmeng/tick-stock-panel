@@ -1,11 +1,12 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { X, Loader2 } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { X, Loader2, Star } from 'lucide-react'
 import type { EChartsOption } from 'echarts'
 
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { useChartTheme } from '@/lib/theme'
+import { WatchlistAddMenu } from '@/components/WatchlistAddMenu'
 import type { DiagnoseSummarySection } from '@/lib/api'
 import { EChart } from './EChart'
 
@@ -140,6 +141,23 @@ export default function DiagnoseDetailDialog({
   const valPoints = Array.isArray(valuation?.points) ? (valuation?.points as Any[]) : []
   const msgRows = Array.isArray(message?.rows) ? (message?.rows as Any[]) : []
 
+  // ---------- 自选 ----------
+  const qc = useQueryClient()
+  const watchlistQ = useQuery({
+    queryKey: QK.watchlist,
+    queryFn: api.watchlistList,
+    enabled: !!symbol,
+  })
+  const inWatchlist = (watchlistQ.data?.symbols ?? []).some((s: { symbol: string }) => s.symbol === symbol)
+  const toggleWatchlist = useMutation({
+    mutationFn: ({ action, groupId }: { action: 'add' | 'remove'; groupId?: string | null }) =>
+      action === 'remove' ? api.watchlistRemove(symbol) : api.watchlistAdd(symbol, '', groupId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: QK.watchlist })
+      qc.invalidateQueries({ queryKey: ['watchlist-enriched'] })
+    },
+  })
+
   // ---------- 财务六维雷达（当期 vs 上年同期） ----------
   const abVal = (id: string, field: 'current' | 'last'): number => {
     const a = abilities.find((x) => x.id === id)
@@ -229,9 +247,32 @@ export default function DiagnoseDetailDialog({
               {fmt(summary?.market_rank, 0)}/{fmt(summary?.market_stock_total, 0)} · 长线价值口径，手动更新
             </p>
           </div>
-          <button type="button" onClick={onClose} aria-label="关闭" className="text-muted hover:text-foreground p-1 rounded-btn transition-colors">
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-1.5">
+            {inWatchlist ? (
+              <button
+                type="button"
+                onClick={() => toggleWatchlist.mutate({ action: 'remove' })}
+                disabled={toggleWatchlist.isPending}
+                className="rounded-btn p-1.5 text-[#FACC15] transition-colors cursor-pointer hover:bg-elevated disabled:opacity-50"
+                title="移出自选"
+                aria-label={`将 ${symbol} 移出自选`}
+              >
+                <Star size={18} className="fill-current" />
+              </button>
+            ) : (
+              <WatchlistAddMenu
+                onSelect={(groupId) => toggleWatchlist.mutate({ action: 'add', groupId })}
+                disabled={toggleWatchlist.isPending}
+                triggerClassName="rounded-btn p-1.5 text-muted transition-colors cursor-pointer hover:bg-elevated hover:text-foreground disabled:opacity-50"
+                ariaLabel={`将 ${symbol} 加入自选`}
+              >
+                <Star size={18} />
+              </WatchlistAddMenu>
+            )}
+            <button type="button" onClick={onClose} aria-label="关闭" className="text-muted hover:text-foreground p-1 rounded-btn transition-colors">
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         <div className="p-5 space-y-4">
