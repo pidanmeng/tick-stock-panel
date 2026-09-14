@@ -33,6 +33,7 @@ from app.api import (
     regime,
     rps,
     screener,
+    sector_rotation,
     signals,
     stock_analysis,
     strategy,
@@ -288,7 +289,7 @@ async def _application_lifespan(app: FastAPI):
                     return
 
                 with shared_heavy_job_limiter.slot(
-                    "normal",
+                    "exclusive",
                     cancel_event=matrix_prewarm_owner.cancel_event,
                 ):
                     result = prewarm_matrix_cache(
@@ -493,6 +494,7 @@ app.include_router(monitor_rules.router)
 app.include_router(lots.router)
 app.include_router(alerts.router)
 app.include_router(rps.router)
+app.include_router(sector_rotation.router)
 
 # 二次开发路由与小粒度策略在所有核心路由后注册, 禁止覆盖核心路径。
 extension_registry, extension_load_errors = configure_backend_extensions(app)
