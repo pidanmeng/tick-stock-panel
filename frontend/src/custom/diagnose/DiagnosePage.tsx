@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
-import { RefreshCw, Trash2, ArrowUp, ArrowDown, ChevronsUpDown, Loader2 } from 'lucide-react'
+import { RefreshCw, Trash2, ArrowUp, ArrowDown, ChevronsUpDown, Loader2, Search } from 'lucide-react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 
 import { api } from '@/lib/api'
@@ -35,6 +35,27 @@ const finDiffOf = (r: DiagnoseRow): number | null => {
 /** ST 判定：与项目既有口径一致（名称含 "ST"，含 *ST），见 price_limits / abnormal_moves。 */
 const isStName = (name: string | null | undefined): boolean =>
   Boolean(name && name.toUpperCase().includes('ST'))
+
+/** 分组矩阵：按诊股可用分值字段统计并排序（参考 概念/行业分析 的矩阵 rail）。 */
+type MatrixSortKey = 'avg' | 'fund' | 'tech' | 'finance'
+interface MatrixGroup {
+  name: string
+  rows: DiagnoseRow[]
+  count: number
+  avg: number
+  fund: number
+  tech: number
+  finance: number
+}
+const groupStatOf = (rows: DiagnoseRow[]) => {
+  const n = rows.length || 1
+  const sum = (col: string) => rows.reduce((s, r) => s + (num(colVal(r, col)) ?? 0), 0) / n
+  return { avg: sum('score_average'), fund: sum('score_fund'), tech: sum('score_tech'), finance: sum('score_finance') }
+}
+const groupVal = (g: MatrixGroup, key: MatrixSortKey): number =>
+  key === 'avg' ? g.avg : key === 'fund' ? g.fund : key === 'tech' ? g.tech : g.finance
+const sortGroups = (arr: MatrixGroup[], key: MatrixSortKey): MatrixGroup[] =>
+  [...arr].sort((a, b) => groupVal(b, key) - groupVal(a, key) || b.count - a.count)
 
 interface SortCol {
   key: string
@@ -101,8 +122,11 @@ export default function DiagnosePage() {
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [includeTrend, setIncludeTrend] = useState(true)
-  const [viewGrouped, setViewGrouped] = useState(false)
+  const [viewMode, setViewMode] = useState<'flat' | 'industry' | 'concept'>('flat')
   const [selectedIndustry, setSelectedIndustry] = useState<string | null>(null)
+  const [selectedConcept, setSelectedConcept] = useState<string | null>(null)
+  const [matrixSort, setMatrixSort] = useState<MatrixSortKey>('avg')
+  const [groupSearch, setGroupSearch] = useState('')
   const [chipFund, setChipFund] = useState(false)
   const [chipFin, setChipFin] = useState(false)
   const [stFilter, setStFilter] = useState<'all' | 'st' | 'non-st'>('all')
@@ -118,6 +142,14 @@ export default function DiagnosePage() {
   const { data: snap } = useQuery({
     queryKey: QK.diagnoseSnapshot,
     queryFn: () => api.thsDiagnoseSnapshot(),
+  })
+
+  // 概念分类数据（扩展数据预置 ext_gn_ths，所属概念为分号拼接的多概念字段）
+  const { data: conceptRows } = useQuery({
+    queryKey: QK.extDataRows('ext_gn_ths', undefined, 20000, '所属概念'),
+    queryFn: () => api.extDataRows('ext_gn_ths', { limit: 20000, columns: ['所属概念'] }),
+    enabled: viewMode === 'concept',
+    retry: false,
   })
 
   // 全局进度（页面 + 左侧菜单共用；切页不丢）
@@ -197,7 +229,7 @@ export default function DiagnosePage() {
     return rows
   }, [filtered, sortKey, sortDir])
 
-  const industries = useMemo(() => {
+  const industries = useMemo<MatrixGroup[]>(() => {
     const map = new Map<string, DiagnoseRow[]>()
     for (const r of filtered) {
       const key = r.industry_name || '未分类'
@@ -206,17 +238,73 @@ export default function DiagnosePage() {
       else map.set(key, [r])
     }
     return Array.from(map.entries())
-      .map(([name, rows]) => {
-        const avg = rows.reduce((s, r) => s + (num(colVal(r, 'score_average')) ?? 0), 0) / (rows.length || 1)
-        return { name, rows, count: rows.length, avg }
-      })
+      .map(([name, rows]) => ({ name, rows, count: rows.length, ...groupStatOf(rows) }))
       .sort((a, b) => b.count - a.count || b.avg - a.avg)
   }, [filtered])
 
+  // 概念：code / 裸代码 → 概念列表（分号拼接字段拆分）
+  const conceptMap = useMemo(() => {
+    const m = new Map<string, string[]>()
+    for (const row of conceptRows?.rows ?? []) {
+      const code = String(row?.code ?? '').trim() || String(row?.symbol ?? '').split('.')[0].trim()
+      if (!code) continue
+      const cs = String(row?.所属概念 ?? '')
+        .split(/[;；]/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+      if (cs.length) m.set(code, cs)
+    }
+    return m
+  }, [conceptRows])
+
+  const conceptsOf = (r: DiagnoseRow): string[] =>
+    conceptMap.get(String(r.code ?? '')) ?? conceptMap.get(String(r.symbol ?? '').split('.')[0]) ?? []
+
+  // 概念分组：一只股票可属于多个概念；无概念归属者归入「未分类」
+  const concepts = useMemo<MatrixGroup[]>(() => {
+    const map = new Map<string, DiagnoseRow[]>()
+    for (const r of filtered) {
+      const cs = conceptsOf(r)
+      if (!cs.length) {
+        const key = '未分类'
+        const arr = map.get(key)
+        if (arr) arr.push(r)
+        else map.set(key, [r])
+        continue
+      }
+      for (const c of cs) {
+        const arr = map.get(c)
+        if (arr) arr.push(r)
+        else map.set(c, [r])
+      }
+    }
+    return Array.from(map.entries())
+      .map(([name, rows]) => ({ name, rows, count: rows.length, ...groupStatOf(rows) }))
+      .sort((a, b) => b.count - a.count || b.avg - a.avg)
+  }, [filtered, conceptMap])
+
+  // 矩阵：搜索过滤 + 排序（参考 概念/行业分析 矩阵 rail）
+  const shownIndustries = useMemo(() => {
+    const q = groupSearch.trim()
+    const list = q ? industries.filter((g) => g.name.includes(q)) : industries
+    return sortGroups(list, matrixSort)
+  }, [industries, groupSearch, matrixSort])
+  const shownConcepts = useMemo(() => {
+    const q = groupSearch.trim()
+    const list = q ? concepts.filter((g) => g.name.includes(q)) : concepts
+    return sortGroups(list, matrixSort)
+  }, [concepts, groupSearch, matrixSort])
+
   const viewRows = useMemo(() => {
-    if (!viewGrouped || !selectedIndustry) return sorted
-    return sorted.filter((r) => (r.industry_name || '未分类') === selectedIndustry)
-  }, [sorted, viewGrouped, selectedIndustry])
+    if (viewMode === 'flat') return sorted
+    if (viewMode === 'industry') {
+      if (!selectedIndustry) return sorted
+      return sorted.filter((r) => (r.industry_name || '未分类') === selectedIndustry)
+    }
+    if (!selectedConcept) return sorted
+    if (selectedConcept === '未分类') return sorted.filter((r) => conceptsOf(r).length === 0)
+    return sorted.filter((r) => conceptsOf(r).includes(selectedConcept))
+  }, [sorted, viewMode, selectedIndustry, selectedConcept, conceptMap])
 
   // ---------------- 虚拟列表（大批量行时避免渲染全部 React 节点） ----------------
   const tableRef = useRef<HTMLTableElement>(null)
@@ -265,9 +353,9 @@ export default function DiagnosePage() {
         <span className="text-xs font-medium text-foreground">{r.name ?? r.symbol}</span>
         <span className="block text-[11px] font-mono text-muted">{r.symbol}</span>
       </td>
-      {viewGrouped ? null : (
+      {viewMode === 'flat' ? (
         <td className="px-2 py-1.5 text-xs text-muted whitespace-nowrap text-left">{r.industry_name ?? '—'}</td>
-      )}
+      ) : null}
       {SORT_COLS.map((c) => (
         <td key={c.key} className="px-2 py-1.5 font-mono tabular-nums whitespace-nowrap text-right">
           {renderNumCell(r, c)}
@@ -370,19 +458,23 @@ export default function DiagnosePage() {
             <div className="inline-flex rounded-btn bg-elevated p-0.5">
               {(
                 [
-                  [false, '平铺'],
-                  [true, '按行业分组'],
+                  ['flat', '平铺'],
+                  ['industry', '按行业分组'],
+                  ['concept', '按概念分组'],
                 ] as const
               ).map(([v, label]) => (
                 <button
                   key={label}
                   type="button"
                   onClick={() => {
-                    setViewGrouped(v)
-                    if (v && !selectedIndustry && industries.length) setSelectedIndustry(industries[0].name)
+                    setViewMode(v)
+                    if (v === 'industry' && selectedIndustry === null && industries.length)
+                      setSelectedIndustry(industries[0].name)
+                    if (v === 'concept' && selectedConcept === null && concepts.length)
+                      setSelectedConcept(concepts[0].name)
                   }}
                   className={`h-7 px-3 rounded-[6px] text-xs transition-colors ${
-                    viewGrouped === v ? 'bg-accent text-white' : 'text-secondary hover:text-foreground'
+                    viewMode === v ? 'bg-accent text-white' : 'text-secondary hover:text-foreground'
                   }`}
                 >
                   {label}
@@ -442,36 +534,91 @@ export default function DiagnosePage() {
           </p>
         </div>
       ) : (
-        <div className={`grid gap-4 ${viewGrouped ? 'lg:grid-cols-[220px_1fr]' : ''}`}>
-          {viewGrouped && (
-            <aside className="space-y-1.5">
-              {industries.map((g) => (
-                <button
-                  key={g.name}
-                  type="button"
-                  onClick={() => setSelectedIndustry(g.name)}
-                  className={`w-full text-left rounded-btn px-3 py-2 border transition-colors ${
-                    selectedIndustry === g.name ? 'border-accent bg-accent/10' : 'border-border bg-surface hover:bg-elevated'
-                  }`}
-                >
-                  <p className="text-sm truncate text-foreground">{g.name}</p>
-                  <p className="text-xs text-muted">
-                    <span className="font-mono">{g.count}</span> 只 · 均分{' '}
-                    <span className="font-mono">{fmt(g.avg)}</span>
-                  </p>
-                </button>
-              ))}
-            </aside>
-          )}
+        <div className={`grid gap-4 ${viewMode !== 'flat' ? 'lg:grid-cols-[260px_1fr]' : ''}`}>
+        {viewMode !== 'flat' && (
+          <aside className="flex max-h-[60vh] min-w-0 flex-col rounded-2xl border border-border bg-surface p-2.5">
+            <div className="shrink-0 px-1 pb-2.5">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-foreground">
+                  {viewMode === 'industry' ? '行业矩阵' : '概念矩阵'}
+                </h3>
+                <span className="text-[10px] text-muted">
+                  Top {(viewMode === 'industry' ? shownIndustries : shownConcepts).length}
+                </span>
+              </div>
+              <div className="mt-2 relative">
+                <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
+                <input
+                  value={groupSearch}
+                  onChange={(e) => setGroupSearch(e.target.value)}
+                  placeholder={viewMode === 'industry' ? '搜索行业' : '搜索概念'}
+                  className="h-8 w-full rounded-lg border border-border bg-base pl-8 pr-3 text-xs text-foreground outline-none focus:border-accent/50"
+                />
+              </div>
+              <div className="mt-2 grid grid-cols-4 overflow-hidden rounded-lg border border-border text-[10px]">
+                {(
+                  [
+                    ['avg', '均分'],
+                    ['fund', '资金'],
+                    ['tech', '技术'],
+                    ['finance', '财务'],
+                  ] as [MatrixSortKey, string][]
+                ).map(([k, label]) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setMatrixSort(k)}
+                    className={`py-1.5 transition-colors ${matrixSort === k ? 'bg-accent/15 text-accent' : 'bg-base text-muted hover:text-foreground'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="max-h-[52vh] overflow-auto rounded-lg border border-border/50">
+              {(viewMode === 'industry' ? shownIndustries : shownConcepts).length === 0 ? (
+                <p className="px-2.5 py-4 text-center text-xs text-muted">
+                  {viewMode === 'concept' && concepts.length === 0
+                    ? '暂无概念数据，请先在「扩展数据-概念」获取 ext_gn_ths'
+                    : '无匹配分组'}
+                </p>
+              ) : (
+                (viewMode === 'industry' ? shownIndustries : shownConcepts).map((g) => (
+                  <button
+                    key={g.name}
+                    type="button"
+                    onClick={() =>
+                      viewMode === 'industry' ? setSelectedIndustry(g.name) : setSelectedConcept(g.name)
+                    }
+                    className={`w-full border-b border-border/50 px-2.5 py-2 text-left transition-colors last:border-b-0 ${
+                      (viewMode === 'industry' ? selectedIndustry : selectedConcept) === g.name
+                        ? 'bg-accent/10'
+                        : 'hover:bg-elevated/40'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">{g.name}</span>
+                      <span className="font-mono text-xs text-foreground">{fmt(g.avg)}</span>
+                    </div>
+                    <div className="mt-1 flex items-center gap-2 text-[10px] text-muted">
+                      <span>{g.count}只</span>
+                      <span className="ml-auto">均分 {fmt(g.avg)}</span>
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </aside>
+        )}
           <div className="rounded-card bg-surface border border-border overflow-hidden">
             <div className="overflow-auto max-h-[60vh]">
               <table ref={tableRef} className="w-full border-collapse text-sm">
                 <thead className="sticky top-0 bg-surface z-10">
                   <tr className="border-b border-border">
                     <th className="px-2 py-1.5 text-left text-xs font-medium text-muted">名称 / 代码</th>
-                    {viewGrouped ? null : (
+                    {viewMode === 'flat' ? (
                       <th className="px-2 py-1.5 text-left text-xs font-medium text-muted">行业</th>
-                    )}
+                    ) : null}
                     {SORT_COLS.map((c) => (
                       <HeaderCol key={c.key} col={c} sortKey={sortKey} sortDir={sortDir} onSort={onSort} right>
                         {c.label}

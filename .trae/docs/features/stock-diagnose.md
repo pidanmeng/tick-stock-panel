@@ -36,7 +36,7 @@ description: 同花顺「智能诊股」二开扩展（L2）：A 股全量/指�
 | 文件 | 路径 | 用途 |
 |------|------|------|
 | 注册 | `frontend/src/custom/diagnose/extension.tsx` | 路由、导航、两个插槽注册 |
-| 页面 | `frontend/src/custom/diagnose/DiagnosePage.tsx` | 快照表格、分组、筛选排序、拉取操作 |
+| 页面 | `frontend/src/custom/diagnose/DiagnosePage.tsx` | 快照表格、行业/概念分组、筛选排序、拉取操作 |
 | 详情 | `frontend/src/custom/diagnose/DiagnoseDetailDialog.tsx` | 单只实时详情浮层（五分区） |
 | 图表 | `frontend/src/custom/diagnose/EChart.tsx` | 轻量 echarts 容器 |
 | 进度 | `frontend/src/custom/diagnose/useDiagnoseProgress.ts` | 全局拉取进度轮询 |
@@ -78,6 +78,20 @@ description: 同花顺「智能诊股」二开扩展（L2）：A 股全量/指�
   → 并行拉 5 组端点：summary / finance / fund / message / valuation（实时，不落盘）
   → 分区级 loading/error 独立隔离展示
 ```
+
+**C. 前端行业 / 概念分组（仅前端逻辑）**
+
+表格工具条提供三态视图切换：`平铺 / 按行业分组 / 按概念分组`（`viewMode`）。行业分组基于快照自带 `industry_name`；概念分组基于**项目内置扩展数据预置 `ext_gn_ths`（扩展概念）**，按 `code` 与快照关联：
+
+```text
+切到「按概念分组」→ 前端懒加载 GET /api/ext-data/ext_gn_ths/rows (limit 20000, columns=所属概念)
+  → 按 code 建立 code → concepts[] 映射（所属概念为分号拼接的多概念字段，拆分为数组）
+  → 以 filtered 快照行构建概念分组：一只股票可属于多个概念（出现在多个组），无概念归属者归入「未分类」
+  → 左侧栏列出概念组（数量 + 均分），选中组在右侧表格过滤
+```
+
+- 左侧栏在行业/概念分组下为**矩阵风格 rail**（参考 概念分析/行业分析 的「概念矩阵/行业矩阵」组件）：圆角面板内含搜索框、可排序小表头（均分/资金/技术/财务，按组均分排序）、每行展示组名+均分+数量，列表区 `max-h-[52vh] overflow-auto`，整体 `max-h-[60vh]`，过长时仅内部滚动，不再撑高整页。
+- 概念预置 `ext_gn_ths` 为**出厂只建配置、不自动拉取**（`backend/app/services/ext_presets.py`）；需先在「扩展数据/概念」页手动获取，否则概念分组为空并提示先获取。诊股 10jqka 私有接口本身不返回概念，故概念数据必须依赖该预置。[DiagnosePage.tsx](file:///c:/Code/tick-stock-panel/frontend/src/custom/diagnose/DiagnosePage.tsx)
 
 ### 数据流
 
@@ -236,3 +250,4 @@ DiagnoseDetailDialog 并行 (DiagnoseDetailDialog.tsx:103-127)
 - **消息面口径**：`score_message` 常年 2.5（无消息刺激），筛选/展示时避免误解（详情弹窗有 tooltip 类提示）。
 - **规划中（未实现）**：盘后自动定时刷新、跨日趋势筛选的下沉到过滤器、诊股分数列并入 enriched 帧供其他模块引用（见 `.trae/documents/ths-diagnose-page-plan.md` §8）。
 - **市场映射**：仅沪深 A 股（SH→17、SZ→33），不含 ETF/指数/北交所；非股票输入在过滤阶段被拒绝（[service.py:99-113](file:///c:/Code/tick-stock-panel/backend/app/custom/ths_diagnose/service.py#L99-L113)）。
+- **概念分组依赖外部预置**：诊股接口不返回概念，按概念分组需先获取内置预置 `ext_gn_ths`（概念页手动拉取）；未获取时概念分组为空并提示，行业分组不受影响。概念归属以 `所属概念` 分号字段为准，一只股票可属多概念。
